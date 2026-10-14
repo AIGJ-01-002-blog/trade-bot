@@ -1,4 +1,5 @@
 """devlog 매매 일지로 체결 기록 보내기 (#243). MCP 도구 record_trade를 JSON-RPC로 부른다.
+코인 체결(#255)은 거래소(exchange)와 통화(currency)를 함께 보낸다. devlog #254가 받는 모양이다.
 토큰은 devlog › AI 연결에서 만든 쓰기 토큰을 환경 변수 DEVLOG_TOKEN으로만 넘긴다. 파일이나 저장소에 적지 않는다.
 """
 from __future__ import annotations
@@ -14,6 +15,11 @@ class JournalError(RuntimeError):
     pass
 
 
+def _num(v: Decimal) -> str:
+    """0.00012345를 1.2345E-4로 쓰지 않도록 늘 고정 소수점으로 보낸다"""
+    return format(v, "f")
+
+
 def payload(fill: Fill, mode: str = "PAPER", strategy: str = "") -> dict:
     args: dict = {
         "external_id": fill.external_id,
@@ -21,15 +27,18 @@ def payload(fill: Fill, mode: str = "PAPER", strategy: str = "") -> dict:
         "symbol": fill.symbol,
         "symbol_name": fill.symbol_name,
         "side": fill.side,
-        "quantity": str(fill.quantity),
-        "price": str(fill.price),
-        "fee": str(fill.fee),
+        "quantity": _num(fill.quantity),
+        "price": _num(fill.price),
+        "currency": fill.currency or "KRW",
+        "fee": _num(fill.fee),
         "strategy": strategy,
         "reason": fill.reason,
         "executed_at": fill.executed_at,
     }
+    if fill.exchange:
+        args["exchange"] = fill.exchange
     if fill.realized_pnl is not None:
-        args["realized_pnl"] = str(fill.realized_pnl)
+        args["realized_pnl"] = _num(fill.realized_pnl)
     return {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "record_trade", "arguments": args}}
 
 

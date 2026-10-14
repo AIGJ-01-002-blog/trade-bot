@@ -1,4 +1,8 @@
-"""python -m devlog_trade run prices.csv : 새 날짜의 종가로 전략을 돌려 모의 체결하고 devlog 매매 일지에 남긴다 (#243)."""
+"""devlog 매매 일지 봇 예제 (#243, #255). 새 가격으로 전략을 돌려 모의 체결하고 devlog 매매 일지에 남긴다.
+
+python -m devlog_trade run prices.csv                       : 종가 CSV (증권사 종목, 원화)
+python -m devlog_trade coin --exchange binance --interval 1h : 거래소 공개 캔들 (코인, API 키 없음)
+"""
 from __future__ import annotations
 
 import argparse
@@ -6,99 +10,193 @@ import json
 import os
 import sys
 from dataclasses import asdict
-from decimal import Decimal
+from datetime import timedelta, timezone
+from decimal import ROUND_FLOOR, Decimal
 from pathlib import Path
+from typing import Callable
 
 from .broker import Fill, PaperBroker
+from .exchanges import EXCHANGES, INTERVALS, Exchange, ExchangeError
 from .journal import Journal, JournalError
-from .strategy import MovingAverageCross, read_bars
+from .strategy import Bar, MovingAverageCross, read_bars
+
+KST = timezone(timedelta(hours=9))
+LIVE_REFUSED = "실계좌 주문은 이 예제에 없어요. 되돌릴 수 없는 주문이라 직접 코드를 더하고 직접 켜야 해요."
 
 
 def _fill_from(d: dict) -> Fill:
     return Fill(d["external_id"], d["symbol"], d["symbol_name"], d["side"], Decimal(d["quantity"]), Decimal(d["price"]),
-                Decimal(d["fee"]), None if d["realized_pnl"] is None else Decimal(d["realized_pnl"]), d["reason"], d["executed_at"])
+                Decimal(d["fee"]), None if d["realized_pnl"] is None else Decimal(d["realized_pnl"]), d["reason"], d["executed_at"],
+                d.get("exchange", ""), d.get("currency", "KRW"))
 
 
 def _pending_path(state: Path) -> Path:
     return state.with_name(state.stem + ".pending.json")
 
 
-def run(args: argparse.Namespace) -> int:
-    if args.live:
-        print("실계좌 주문은 이 예제에 없어요. 되돌릴 수 없는 주문이라 직접 코드를 더하고 직접 켜야 해요.", file=sys.stderr)
-        return 2
-    state = Path(args.state)
-    broker = PaperBroker.load(state) if state.exists() else PaperBroker(
-        cash=Decimal(args.cash), fee_rate=Decimal(args.fee_rate), sell_tax_rate=Decimal(args.sell_tax_rate))
-    pending_file = _pending_path(state)
-    pending = [_fill_from(d) for d in json.loads(pending_file.read_text(encoding="utf-8"))] if pending_file.exists() else []
-    journal = None if args.dry_run else Journal(args.server, os.environ.get("DEVLOG_TOKEN", ""))
-    strategy = MovingAverageCross(window=args.window, stop_loss=Decimal(args.stop_loss))
+def _amount(v: Decimal, currency: str) -> str:
+    return f"{v:,.0f}원" if currency == "KRW" else f"{v.normalize():f} {currency}"
 
-    def send_all() -> bool:
-        while pending:
-            fill = pending[0]
-            if journal is None:
-                print(f"[dry-run] {fill.executed_at} {fill.symbol_name} {fill.side} {fill.quantity}주 @ {fill.price} 손익 {fill.realized_pnl} · {fill.reason}")
+
+class Session:
+    """상태 파일·보내지 못한 체결·devlog 보내기를 한곳에서 다룬다. CSV와 코인 모드가 함께 쓴다"""
+
+    def __init__(self, args: argparse.Namespace, new_broker: Callable[[], PaperBroker]):
+        self.args = args
+        self.state = Path(args.state)
+        self.broker = PaperBroker.load(self.state) if self.state.exists() else new_broker()
+        self.pending_file = _pending_path(self.state)
+        self.pending = [_fill_from(d) for d in json.loads(self.pending_file.read_text(encoding="utf-8"))] \
+            if self.pending_file.exists() else []
+        self.journal = None if args.dry_run else Journal(args.server, os.environ.get("DEVLOG_TOKEN", ""))
+
+    def send_all(self) -> bool:
+        while self.pending:
+            fill = self.pending[0]
+            if self.journal is None:
+                unit = "주" if fill.currency == "KRW" and not fill.exchange else " " + fill.symbol_name
+                pnl = "" if fill.realized_pnl is None else f" 손익 {_amount(fill.realized_pnl, fill.currency)}"
+                print(f"[dry-run] {fill.executed_at} {fill.symbol_name} {fill.side} {fill.quantity:f}{unit} @ "
+                      f"{_amount(fill.price, fill.currency)}{pnl} · {fill.reason}")
             else:
                 try:
-                    print(journal.record(fill, "PAPER", args.strategy))
+                    print(self.journal.record(fill, "PAPER", self.args.strategy))
                 except (JournalError, OSError) as e:
                     print(f"devlog에 남기지 못했어요 (다음 실행 때 다시 보내요): {e}", file=sys.stderr)
                     return False
-            pending.pop(0)
+            self.pending.pop(0)
         return True
 
-    def save() -> None:
-        broker.save(state)
-        if pending:
-            pending_file.write_text(json.dumps([asdict(f) for f in pending], default=str, ensure_ascii=False, indent=2), encoding="utf-8")
-        elif pending_file.exists():
-            pending_file.unlink()
+    def trade(self, strategy: MovingAverageCross, bars: list[Bar], quantity: Callable[[Decimal], Decimal],
+              executed_at: Callable[[Bar], str]) -> None:
+        """bars 전체로 전략을 데우고, 상태 파일의 마지막 시점보다 뒤인 봉에서만 체결한다"""
+        broker = self.broker
+        for bar in bars:
+            fresh = bar.date > broker.last_date
+            pos = broker.positions.get(bar.symbol)
+            signal = strategy.on_bar(bar, pos is not None, pos.avg_price if pos else Decimal(0))
+            if not fresh or signal is None:
+                continue
+            if signal.side == "BUY":
+                fill = broker.buy(bar.symbol, bar.name, quantity(bar.close), bar.close, signal.reason, executed_at(bar))
+            else:
+                fill = broker.sell(bar.symbol, bar.name, broker.holding(bar.symbol), bar.close, signal.reason, executed_at(bar))
+            if fill:
+                self.pending.append(fill)
+        if bars:
+            broker.last_date = max(broker.last_date, bars[-1].date)
 
-    ok = send_all()
-    for bar in read_bars(Path(args.prices)):
-        fresh = bar.date > broker.last_date
-        pos = broker.positions.get(bar.symbol)
-        signal = strategy.on_bar(bar, pos is not None, pos.avg_price if pos else Decimal(0))
-        if not fresh or signal is None:
-            continue
-        at = f"{bar.date}T{args.time}:00+09:00"
-        if signal.side == "BUY":
-            qty = (Decimal(args.budget) / bar.close).to_integral_value(rounding="ROUND_FLOOR")
-            fill = broker.buy(bar.symbol, bar.name, qty, bar.close, signal.reason, at)
-        else:
-            fill = broker.sell(bar.symbol, bar.name, broker.holding(bar.symbol), bar.close, signal.reason, at)
-        if fill:
-            pending.append(fill)
-    bars = read_bars(Path(args.prices))
-    if bars:
-        broker.last_date = max(broker.last_date, bars[-1].date)
-    ok = send_all() and ok
-    save()
-    print(f"현금 {broker.cash:,.0f}원 · 보유 {', '.join(f'{s} {p.quantity}주' for s, p in broker.positions.items()) or '없음'}")
+    def save(self) -> None:
+        self.broker.save(self.state)
+        if self.pending:
+            self.pending_file.write_text(json.dumps([asdict(f) for f in self.pending], default=str, ensure_ascii=False, indent=2),
+                                         encoding="utf-8")
+        elif self.pending_file.exists():
+            self.pending_file.unlink()
+
+    def summary(self) -> str:
+        b = self.broker
+        held = ", ".join(f"{s} {p.quantity:f}" + ("주" if not b.exchange else "") for s, p in b.positions.items())
+        return f"현금 {_amount(b.cash, b.currency)} · 보유 {held or '없음'}"
+
+
+def run(args: argparse.Namespace) -> int:
+    """종가 CSV 모드 (#243)"""
+    if args.live:
+        print(LIVE_REFUSED, file=sys.stderr)
+        return 2
+    s = Session(args, lambda: PaperBroker(cash=Decimal(args.cash), fee_rate=Decimal(args.fee_rate),
+                                          sell_tax_rate=Decimal(args.sell_tax_rate)))
+    ok = s.send_all()
+    s.trade(MovingAverageCross(window=args.window, stop_loss=Decimal(args.stop_loss)), read_bars(Path(args.prices)),
+            lambda close: (Decimal(args.budget) / close).to_integral_value(rounding=ROUND_FLOOR),
+            lambda bar: f"{bar.date}T{args.time}:00+09:00")
+    ok = s.send_all() and ok
+    s.save()
+    print(s.summary())
     return 0 if ok else 1
+
+
+COIN_STEP = Decimal("0.00000001")  # 코인 수량은 소수 8자리까지
+
+
+def coin(args: argparse.Namespace, exchange: Exchange | None = None) -> int:
+    """거래소 공개 캔들 모드 (#255). 다 만들어진 봉의 종가로만 판단하고, 그 봉이 닫힌 시각을 체결 시각으로 남긴다"""
+    if args.live:
+        print(LIVE_REFUSED, file=sys.stderr)
+        return 2
+    ex = exchange or EXCHANGES[args.exchange]()
+    symbol = (args.symbol or ex.default_symbol).upper()
+    fee_rate = Decimal(args.fee_rate) if args.fee_rate is not None else ex.fee_rate
+    if args.state is None:
+        args.state = f"trade-state-{ex.code.lower()}-{symbol}.json"
+    s = Session(args, lambda: PaperBroker(cash=Decimal(args.cash) if args.cash else ex.default_cash, fee_rate=fee_rate,
+                                          currency=ex.currency, exchange=ex.code))
+    if s.broker.exchange != ex.code or s.broker.currency != ex.currency:
+        print(f"상태 파일 {s.state}은 {s.broker.exchange or '종가 CSV'}({s.broker.currency}) 계좌예요. --state로 다른 파일을 주세요.",
+              file=sys.stderr)
+        return 2
+    ok = s.send_all()
+    try:
+        candles = ex.fetch_candles(symbol, args.interval, args.limit)
+    except (ExchangeError, OSError, ValueError, KeyError) as e:
+        print(f"{ex.code} 시세를 받지 못했어요 (다음 실행 때 다시 해요): {e}", file=sys.stderr)
+        s.save()
+        return 1
+    name = ex.coin_name(symbol)
+    # 봉 시작 시각(UTC ISO)을 순서 키로 쓴다. 상태 파일에 남아 같은 봉을 두 번 거래하지 않는다
+    bars = [Bar(c.open_time.strftime("%Y-%m-%dT%H:%M:%SZ"), symbol, name, c.close) for c in candles]
+    closed_at = {b.date: c.close_time for b, c in zip(bars, candles)}
+    budget = Decimal(args.budget) if args.budget else ex.default_budget
+
+    def quantity(close: Decimal) -> Decimal:
+        spend = min(budget, s.broker.cash)
+        return (spend / (close * (1 + s.broker.fee_rate))).quantize(COIN_STEP, rounding=ROUND_FLOOR)
+
+    s.trade(MovingAverageCross(window=args.window, stop_loss=Decimal(args.stop_loss), period=f"개 {args.interval}봉"), bars,
+            quantity, lambda bar: closed_at[bar.date].astimezone(KST).isoformat(timespec="seconds"))
+    ok = s.send_all() and ok
+    s.save()
+    print(f"{ex.code} {symbol} {args.interval}봉 {len(candles)}개 · 마지막 봉 {bars[-1].date if bars else '없음'} · {s.summary()}")
+    return 0 if ok else 1
+
+
+def _common(r: argparse.ArgumentParser) -> None:
+    r.add_argument("--server", default="https://devlog.life", help="devlog 주소. 집에서 띄웠으면 http://localhost:8080")
+    r.add_argument("--window", type=int, default=5, help="이동평균에 쓰는 봉(날) 수")
+    r.add_argument("--stop-loss", default="0.03", help="손절 비율 (0.03 = -3%%)")
+    r.add_argument("--strategy", default="ma-cross", help="매매 일지에 남길 전략 이름")
+    r.add_argument("--dry-run", action="store_true", help="devlog에 보내지 않고 화면에만 보여요")
+    r.add_argument("--live", action="store_true", help=argparse.SUPPRESS)
 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="devlog_trade", description="모의 체결 봇 예제: 체결마다 devlog 매매 일지에 기록을 남겨요.")
     sub = p.add_subparsers(dest="command", required=True)
-    r = sub.add_parser("run", help="새 날짜의 종가로 전략을 돌려 모의 체결하고 devlog에 남겨요")
+
+    r = sub.add_parser("run", help="종가 CSV로 전략을 돌려 모의 체결하고 devlog에 남겨요")
     r.add_argument("prices", help="date,symbol,name,close 열이 있는 CSV")
     r.add_argument("--state", default="trade-state.json", help="모의 계좌 상태 파일 (현금·보유 종목·처리한 날짜)")
-    r.add_argument("--server", default="https://devlog.life", help="devlog 주소. 집에서 띄웠으면 http://localhost:8080")
     r.add_argument("--cash", default="10000000", help="처음 모의 현금 (원)")
     r.add_argument("--budget", default="1000000", help="한 번 살 때 쓸 금액 (원)")
     r.add_argument("--fee-rate", default="0", help="매매 수수료율 (예: 0.00015). 쓰는 증권사 기준으로 넣어요")
     r.add_argument("--sell-tax-rate", default="0", help="매도할 때 내는 세율. 그해 세율을 확인해 넣어요")
-    r.add_argument("--window", type=int, default=5, help="이동평균 날 수")
-    r.add_argument("--stop-loss", default="0.03", help="손절 비율 (0.03 = -3%)")
-    r.add_argument("--strategy", default="ma-cross", help="매매 일지에 남길 전략 이름")
     r.add_argument("--time", default="15:20", help="체결 시각으로 남길 한국 시간 (종가 기준이라 장 마감 무렵)")
-    r.add_argument("--dry-run", action="store_true", help="devlog에 보내지 않고 화면에만 보여요")
-    r.add_argument("--live", action="store_true", help=argparse.SUPPRESS)
+    _common(r)
+
+    c = sub.add_parser("coin", help="거래소 공개 캔들로 코인 모의매매하고 devlog에 남겨요 (API 키 없음)")
+    c.add_argument("--exchange", choices=sorted(EXCHANGES), default="binance", help="시세를 받을 거래소")
+    c.add_argument("--symbol", help="마켓 코드. 기본은 바이낸스 BTCUSDT, 업비트 KRW-BTC")
+    c.add_argument("--interval", choices=list(INTERVALS), default="1h", help="봉 간격")
+    c.add_argument("--limit", type=int, default=200, help="한 번에 받을 봉 수 (전략을 데우는 데 씀, 업비트는 200까지)")
+    c.add_argument("--state", help="모의 계좌 상태 파일. 기본 trade-state-<거래소>-<마켓>.json")
+    c.add_argument("--cash", help="처음 모의 현금. 기본 바이낸스 1000 USDT, 업비트 1,000,000원")
+    c.add_argument("--budget", help="한 번 살 때 쓸 금액. 기본 바이낸스 100 USDT, 업비트 100,000원")
+    c.add_argument("--fee-rate", help="수수료율. 기본 바이낸스 0.001(0.1%%), 업비트 0.0005(0.05%%)")
+    _common(c)
+
     args = p.parse_args(argv)
-    return run(args)
+    return run(args) if args.command == "run" else coin(args)
 
 
 if __name__ == "__main__":

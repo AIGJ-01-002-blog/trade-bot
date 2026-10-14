@@ -31,8 +31,10 @@ def read_bars(path: Path) -> list[Bar]:
 
 
 class MovingAverageCross:
-    def __init__(self, window: int = 5, stop_loss: Decimal = Decimal("0.03")):
+    def __init__(self, window: int = 5, stop_loss: Decimal = Decimal("0.03"), period: str = "일"):
+        """period: 신호 이유에 쓰는 기간 이름. 종가 CSV는 "5일", 코인 1시간봉은 "5개 1h봉"처럼 읽힌다"""
         self.window = window
+        self.period = period
         self.stop_loss = stop_loss
         self.closes: dict[str, list[Decimal]] = {}
 
@@ -47,7 +49,7 @@ class MovingAverageCross:
         if holding and avg_price > 0 and bar.close <= avg_price * (1 - self.stop_loss):
             return Signal("SELL", f"손절선 -{self.stop_loss * 100:.0f}% 도달")
         if not holding and above and not prev_above:
-            return Signal("BUY", f"종가가 {self.window}일 이동평균선 위로 올라섬")
+            return Signal("BUY", f"종가가 {self.window}{self.period} 이동평균선 위로 올라섬")
         if holding and not above and prev_above:
-            return Signal("SELL", f"종가가 {self.window}일 이동평균선 아래로 내려감")
+            return Signal("SELL", f"종가가 {self.window}{self.period} 이동평균선 아래로 내려감")
         return None

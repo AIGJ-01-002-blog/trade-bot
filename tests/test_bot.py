@@ -12,7 +12,10 @@ from pathlib import Path
 from unittest import mock
 
 from devlog_trade import __main__ as cli
+from datetime import datetime, timedelta, timezone
+
 from devlog_trade.broker import PaperBroker
+from devlog_trade.exchanges import Binance, ExchangeError, Upbit
 from devlog_trade.journal import Journal, JournalError, payload
 from devlog_trade.strategy import Bar, MovingAverageCross
 
@@ -49,6 +52,67 @@ class BrokerTest(unittest.TestCase):
         self.assertEqual(again.cash, b.cash)
         self.assertEqual(again.positions["A"].quantity, Decimal(3))
         self.assertEqual(again.last_date, "2026-10-13")
+
+
+class CoinBrokerTest(unittest.TestCase):
+    def test_fractional_quantity_and_usdt_amounts(self):
+        b = PaperBroker(cash=Decimal(1000), fee_rate=Decimal("0.001"), currency="USDT", exchange="BINANCE")
+        buy = b.buy("BTCUSDT", "비트코인", Decimal("0.00123456"), Decimal("65000.12"), "", "t")
+        self.assertEqual(buy.fee, Decimal("0.08024655"))  # 0.0802465481… → 소수 8자리
+        self.assertEqual((buy.exchange, buy.currency), ("BINANCE", "USDT"))
+        sell = b.sell("BTCUSDT", "비트코인", Decimal("0.00123456"), Decimal("66000"), "", "t")
+        self.assertEqual(sell.realized_pnl, Decimal("1.15293089"))
+        self.assertEqual(b.holding("BTCUSDT"), 0)
+
+    def test_krw_amounts_stay_in_won(self):
+        b = PaperBroker(cash=Decimal(1_000_000), fee_rate=Decimal("0.0005"), currency="KRW", exchange="UPBIT")
+        buy = b.buy("KRW-BTC", "비트코인", Decimal("0.001"), Decimal(95_000_000), "", "t")
+        self.assertEqual(buy.fee, Decimal(48))  # 47.5원 → 48원
+
+
+def binance_rows(closes, start):
+    """바이낸스 klines 모양: [여는 시각(ms), 시가, 고가, 저가, 종가, …]"""
+    return [[int((start + timedelta(hours=i)).timestamp() * 1000), "0", "0", "0", str(c), "0", 0] for i, c in enumerate(closes)]
+
+
+def upbit_rows(closes, start):
+    """업비트 분봉 모양. 최신 봉이 먼저 온다"""
+    rows = [{"market": "KRW-BTC", "candle_date_time_utc": (start + timedelta(hours=i)).strftime("%Y-%m-%dT%H:%M:%S"),
+             "trade_price": c} for i, c in enumerate(closes)]
+    return list(reversed(rows))
+
+
+START = datetime(2026, 10, 13, 0, 0, tzinfo=timezone.utc)
+# 내려가다 올라서고(매수) 다시 꺾이는(매도) 시세. 마지막 값은 아직 닫히지 않은 봉
+CLOSES = [100, 99, 98, 97, 96, 95, 101, 104, 106, 99, 97, 300]
+
+
+class ExchangeTest(unittest.TestCase):
+    def test_binance_uses_public_klines_and_drops_the_open_candle(self):
+        urls = []
+        ex = Binance(fetch=lambda url: urls.append(url) or binance_rows(CLOSES, START))
+        now = START + timedelta(hours=len(CLOSES) - 1, minutes=30)
+        candles = ex.fetch_candles("BTCUSDT", "1h", 200, now=now)
+        self.assertIn("data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=200", urls[0])
+        self.assertEqual(len(candles), len(CLOSES) - 1)
+        self.assertEqual(candles[0].close, Decimal(100))
+        self.assertEqual(candles[0].close_time, START + timedelta(hours=1))
+
+    def test_upbit_sorts_newest_first_rows(self):
+        urls = []
+        ex = Upbit(fetch=lambda url: urls.append(url) or upbit_rows(CLOSES, START))
+        candles = ex.fetch_candles("KRW-BTC", "1h", 500, now=START + timedelta(hours=len(CLOSES) - 1, minutes=1))
+        self.assertIn("api.upbit.com/v1/candles/minutes/60?market=KRW-BTC&count=200", urls[0])
+        self.assertEqual([c.close for c in candles][:3], [Decimal(100), Decimal(99), Decimal(98)])
+        self.assertEqual(ex.coin_name("KRW-BTC"), "비트코인")
+
+    def test_wrong_market_or_interval_is_refused(self):
+        with self.assertRaises(ExchangeError):
+            Binance(fetch=lambda url: []).fetch_candles("KRW-BTC", "1h", 10)
+        with self.assertRaises(ExchangeError):
+            Upbit(fetch=lambda url: []).fetch_candles("BTCUSDT", "1h", 10)
+        with self.assertRaises(ExchangeError):
+            Upbit(fetch=lambda url: []).fetch_candles("KRW-BTC", "2h", 10)
 
 
 class StrategyTest(unittest.TestCase):
@@ -117,6 +181,20 @@ class JournalTest(unittest.TestCase):
         self.assertEqual(args["mode"], "PAPER")
         sell = b.sell("005930", "삼성전자", Decimal(1), Decimal(71_000), "", "2026-10-15T15:20:00+09:00")
         self.assertIn("realized_pnl", payload(sell)["params"]["arguments"])
+
+    def test_coin_payload_carries_exchange_currency_and_plain_decimals(self):
+        b = PaperBroker(cash=Decimal(1000), fee_rate=Decimal("0.001"), currency="USDT", exchange="BINANCE")
+        buy = b.buy("BTCUSDT", "비트코인", Decimal("0.00001"), Decimal("65000"), "신호", "2026-10-14T10:00:00+09:00")
+        args = payload(buy)["params"]["arguments"]
+        self.assertEqual((args["exchange"], args["currency"]), ("BINANCE", "USDT"))
+        self.assertEqual(args["quantity"], "0.00001")  # 1E-5가 아니다
+        self.assertEqual(args["fee"], "0.00065000")
+
+    def test_stock_payload_has_no_exchange(self):
+        buy = PaperBroker(cash=Decimal(100_000)).buy("005930", "삼성전자", Decimal(1), Decimal(70_000), "", "t")
+        args = payload(buy)["params"]["arguments"]
+        self.assertNotIn("exchange", args)
+        self.assertEqual(args["currency"], "KRW")
 
     def test_needs_token(self):
         with self.assertRaises(JournalError):
@@ -203,6 +281,88 @@ class CliTest(unittest.TestCase):
             code, out, _ = self.run_cli("run", str(SAMPLE), "--state", str(Path(d) / "s.json"), "--dry-run")
         self.assertEqual(code, 0)
         self.assertIn("[dry-run]", out)
+
+
+class CoinCliTest(unittest.TestCase):
+    def run_coin(self, ex, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err), mock.patch.dict(cli.EXCHANGES, {"binance": lambda: ex, "upbit": lambda: ex}):
+            code = cli.main(["coin", *argv])
+        return code, out.getvalue(), err.getvalue()
+
+    def binance(self, closes, hours_open):
+        now = START + timedelta(hours=hours_open)
+        ex = Binance(fetch=lambda url: binance_rows(closes, START))
+        real = ex.fetch_candles
+        ex.fetch_candles = lambda symbol, interval, limit, now=now: real(symbol, interval, limit, now=now)
+        return ex
+
+    def test_live_orders_are_refused(self):
+        code, _, err = self.run_coin(Binance(fetch=lambda url: []), "--live")
+        self.assertEqual(code, 2)
+        self.assertIn("실계좌 주문은 이 예제에 없어요", err)
+
+    def test_trades_closed_candles_once_and_sends_coin_fields(self):
+        with tempfile.TemporaryDirectory() as d:
+            state = str(Path(d) / "coin.json")
+            fake = FakeDevlog()
+            try:
+                with mock.patch.dict("os.environ", {"DEVLOG_TOKEN": "secret"}):
+                    ex = self.binance(CLOSES, len(CLOSES) - 0.5)
+                    code, out, _ = self.run_coin(ex, "--state", state, "--server", fake.url, "--window", "3")
+                    self.assertEqual(code, 0, out)
+                    sent = [c["params"]["arguments"] for c in fake.calls]
+                    self.assertEqual([a["side"] for a in sent], ["BUY", "SELL"])
+                    buy, sell = sent
+                    self.assertEqual((buy["exchange"], buy["currency"], buy["symbol"], buy["symbol_name"]),
+                                     ("BINANCE", "USDT", "BTCUSDT", "비트코인"))
+                    # 100 USDT로 수수료까지 살 수 있는 만큼, 소수 8자리에서 버림
+                    self.assertEqual(buy["quantity"], "0.98910990")
+                    self.assertEqual(buy["executed_at"], "2026-10-13T16:00:00+09:00")  # 6시 봉이 7시(UTC)에 닫힘
+                    self.assertIn("3개 1h봉 이동평균선 위로", buy["reason"])
+                    self.assertIn("realized_pnl", sell)
+                    self.assertNotIn("300", json.dumps(sent))  # 아직 닫히지 않은 봉으로는 거래하지 않는다
+
+                    # 같은 봉으로 다시 돌리면 새 체결이 없다
+                    code, out, _ = self.run_coin(ex, "--state", state, "--server", fake.url, "--window", "3")
+                    self.assertEqual(code, 0)
+                    self.assertEqual(len(fake.calls), 2)
+                    self.assertIn("보유 없음", out)
+                    saved = json.loads(Path(state).read_text(encoding="utf-8"))
+                    self.assertEqual(saved["last_date"], "2026-10-13T10:00:00Z")
+                    self.assertEqual((saved["exchange"], saved["currency"]), ("BINANCE", "USDT"))
+            finally:
+                fake.close()
+
+    def test_state_of_another_account_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            state = Path(d) / "s.json"
+            PaperBroker(cash=Decimal(1_000_000), currency="KRW", exchange="UPBIT").save(state)
+            code, _, err = self.run_coin(self.binance(CLOSES, 11.5), "--state", str(state), "--dry-run")
+        self.assertEqual(code, 2)
+        self.assertIn("UPBIT(KRW) 계좌", err)
+
+    def test_upbit_dry_run_prints_won(self):
+        now = START + timedelta(hours=len(CLOSES) - 0.5)
+        closes = [c * 1_000_000 for c in CLOSES]
+        ex = Upbit(fetch=lambda url: upbit_rows(closes, START))
+        real = ex.fetch_candles
+        ex.fetch_candles = lambda symbol, interval, limit: real(symbol, interval, limit, now=now)
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict("os.environ", {}, clear=True):
+            code, out, _ = self.run_coin(ex, "--exchange", "upbit", "--window", "3", "--state", str(Path(d) / "u.json"), "--dry-run")
+        self.assertEqual(code, 0, out)
+        self.assertIn("[dry-run]", out)
+        self.assertIn("원", out)
+        self.assertIn("UPBIT KRW-BTC 1h봉 11개", out)
+
+    def test_network_failure_keeps_state_and_exits_1(self):
+        def down(url):
+            raise OSError("연결 안 됨")
+        with tempfile.TemporaryDirectory() as d:
+            code, _, err = self.run_coin(Binance(fetch=down), "--state", str(Path(d) / "s.json"), "--dry-run")
+            self.assertTrue((Path(d) / "s.json").exists())
+        self.assertEqual(code, 1)
+        self.assertIn("시세를 받지 못했어요", err)
 
 
 if __name__ == "__main__":
