@@ -6,6 +6,9 @@ services:
     restart: unless-stopped
     environment:
       DEVLOG_TOKEN: ${DEVLOG_TOKEN:-}
+      AI_DECISION: ${AI_DECISION:-off}          # AI 매매 판단 (#263). on으로 켜요
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      AI_PROVIDER: ${AI_PROVIDER:-gemini}
     volumes:
       - ./data:/data
       - ./jobs.conf:/app/jobs.conf:ro

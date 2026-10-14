@@ -6,6 +6,9 @@ BOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$BOT_DIR" || exit 1
 DEVLOG_TOKEN="$(security find-generic-password -a "$USER" -s devlog-trade-bot -w 2>/dev/null || true)"
 export DEVLOG_TOKEN
+# AI 매매 판단(#263)을 켤 때만: Gemini 키도 키체인(서비스 이름 devlog-trade-bot-gemini)에서 읽는다
+GEMINI_API_KEY="$(security find-generic-password -a "$USER" -s devlog-trade-bot-gemini -w 2>/dev/null || true)"
+[ -n "$GEMINI_API_KEY" ] && export GEMINI_API_KEY
 export PYTHONUTF8=1
 echo "=== $(date '+%Y-%m-%d %H:%M:%S')"
 exec /usr/bin/caffeinate -i /usr/bin/env python3 -m devlog_trade jobs "${JOBS_FILE:-$BOT_DIR/jobs.conf}"

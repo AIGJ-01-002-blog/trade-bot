@@ -18,6 +18,7 @@ from decimal import ROUND_FLOOR, Decimal
 from pathlib import Path
 from typing import Callable
 
+from . import ai
 from .broker import Fill, PaperBroker
 from .exchanges import COINS, EXCHANGES, INTERVALS, Exchange, ExchangeError
 from .futures import FuturesBroker
@@ -194,7 +195,13 @@ def coin(args: argparse.Namespace) -> int:
         return 2
     ok = s.send_all()
     budget = Decimal(args.budget) if args.budget else ex.default_budget
-    strategy = MovingAverageCross(window=args.window, stop_loss=Decimal(args.stop_loss), period=f"개 {args.interval}봉")
+    rule = MovingAverageCross(window=args.window, stop_loss=Decimal(args.stop_loss), period=f"개 {args.interval}봉")
+    try:
+        strategy, args.strategy = ai.wrap(args, rule, args.interval, INTERVALS, b)  # AI_DECISION=on일 때만 (#263)
+    except ai.AiError as e:
+        print(e, file=sys.stderr)
+        s.save()
+        return 2
     seen = []
     for symbol in symbols:
         try:
@@ -272,6 +279,7 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--fee-rate", help="수수료율. 기본 바이낸스 현물 0.001, 선물 0.0005, 업비트 0.0005")
     c.add_argument("--leverage", default="1", help="선물 레버리지 (1~3배, 기본 1배)")
     _common(c)
+    ai.add_args(c)
 
     j = sub.add_parser("jobs", help="작업 파일(줄마다 coin 옵션)을 차례로 돌려요. 맥 launchd·Docker가 써요")
     j.add_argument("file", help="예: jobs.conf")
