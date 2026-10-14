@@ -188,7 +188,8 @@ def report(results: list[dict], fng_ok: bool) -> str:
                   f"- 앞 구간: 수익 {fmt(i['return_pct'])}%, 낙폭 {fmt(i['max_dd_pct'])}%, 거래 {i['trades']}",
                   f"- 뒤 구간: 수익 {fmt(o['return_pct'])}%, 낙폭 {fmt(o['max_dd_pct'])}%, 최악의 하루 {fmt(o['worst_day_pct'])}%, "
                   f"거래 {o['trades']}, 승률 {fmt(o['win_rate_pct'])}%, 평균 {fmt(o['avg_r'], 2)}R, 수수료 {fmt(o['fees'], 2)}, "
-                  f"펀딩비 {fmt(o['funding'], 2)}, 코어로 옮긴 돈 {fmt(o['to_core'], 2)}",
+                  f"펀딩비 {fmt(o['funding'], 2)}, 코어로 옮긴 돈 {fmt(o['to_core'], 2)}, "
+                  f"그림자 거래(켈리 0 이하라 돈 없이 기록만) {o['shadow_trades']}건",
                   f"- 통과 항목: " + ", ".join(f"{k} {'✅' if v else '❌'}" for k, v in r["pass"].items() if k != "all"),
                   f"- 정리 이유: {r['exits_oos']}",
                   f"- 코인별(건수, 손익): {r['by_coin_oos']}",

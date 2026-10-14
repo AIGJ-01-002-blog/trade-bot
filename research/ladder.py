@@ -164,6 +164,7 @@ class Pos:
     pnl: float = 0.0  # 수수료·펀딩비 뺀 실현 손익 누계
     fees: float = 0.0
     funding: float = 0.0
+    shadow: bool = False  # 그림자 거래: 돈을 넣지 않고 R만 기록(켈리가 0 이하일 때)
 
 
 @dataclass
@@ -176,6 +177,7 @@ class Result:
     fees: float = 0.0
     funding: float = 0.0
     liquidations: int = 0
+    shadow: pd.DataFrame = field(default_factory=pd.DataFrame)  # 그림자 거래 기록
 
 
 def wilson_low(wins: int, n: int, z: float) -> float:
@@ -205,8 +207,16 @@ class Ladder:
     # 잔고
     def equity(self, px: dict[str, float]) -> float:
         if self.futures:
-            return self.cash + sum(p.side * (px[c] - p.entry) * p.qty for c, p in self.pos.items())
-        return self.cash + sum(p.qty * px[c] for c, p in self.pos.items())
+            return self.cash + sum(p.side * (px[c] - p.entry) * p.qty for c, p in self.pos.items() if not p.shadow)
+        return self.cash + sum(p.qty * px[c] for c, p in self.pos.items() if not p.shadow)
+
+    def _real(self) -> int:
+        return sum(1 for t in self.closed if not t["shadow"])
+
+    def _result(self, equity: pd.Series) -> Result:
+        real = pd.DataFrame([t for t in self.closed if not t["shadow"]])
+        shadow = pd.DataFrame([t for t in self.closed if t["shadow"]])
+        return Result(self.name, equity, real, self.orders, self.transfers, self.fees, self.funding_paid, self.liqs, shadow)
 
     def _fill(self, price: float, side: int) -> float:
         return price * (1 + self.slip * side)
@@ -216,6 +226,12 @@ class Ladder:
         px = self._fill(price, -pos.side)
         fee = qty * px * self.fee
         gross = pos.side * (px - pos.entry) * qty
+        if pos.shadow:
+            pos.pnl += gross - fee
+            pos.qty -= qty
+            if pos.qty <= pos.qty0 * 1e-9:
+                self._close(ts, pos, why)
+            return
         if self.futures:
             self.cash += gross - fee
         else:
@@ -232,7 +248,8 @@ class Ladder:
         del self.pos[pos.coin]
         self.closed.append({"coin": pos.coin, "side": pos.side, "opened": pos.opened, "closed": ts, "entry": pos.entry,
                             "pnl": pos.pnl, "r": pos.pnl / pos.risk_amt if pos.risk_amt else 0.0, "exit": why,
-                            "lev": pos.lev, "fees": pos.fees, "funding": pos.funding, "stop_pct": pos.stop_pct})
+                            "lev": pos.lev, "fees": pos.fees, "funding": pos.funding, "stop_pct": pos.stop_pct,
+                            "shadow": pos.shadow})
 
     def _liquidate(self, ts, pos: Pos) -> None:
         loss = pos.margin * pos.qty / pos.qty0
@@ -246,7 +263,7 @@ class Ladder:
     # 크기
     def _risk(self, side: int, coin: str, row, eq_peak: float, eq_size: float) -> float | None:
         p = self.p
-        n_closed = len(self.closed)
+        n_closed = self._real()
         cap = next(c for lim, c in p.risk_stages if n_closed < lim)
         same = [t["r"] for t in self.closed if t["side"] == side][-p.kelly_window:]
         pool = same if len(same) >= p.kelly_min_samples else [t["r"] for t in self.closed][-p.kelly_window:]
@@ -257,7 +274,7 @@ class Ladder:
             rr = (np.mean(wins) / np.mean(losses)) if wins and losses and np.mean(losses) > 0 else (10.0 if wins else 0.0)
             k_raw = w_low - (1 - w_low) / rr if rr > 0 else -1
             if k_raw <= 0:
-                return None  # 기대값이 마이너스인 셋업은 거래하지 않는다
+                return None  # 기대값이 마이너스면 돈은 넣지 않는다(그림자 거래로 R만 쌓아 다시 플러스가 되면 돌아온다)
             base = min(k_raw * p.kelly_fraction, cap)
         else:
             base = min(p.fixed_risk, cap)
@@ -276,12 +293,14 @@ class Ladder:
         p = self.p
         if row.stop_raw != row.stop_raw or row.stop_raw > p.stop_max:
             return
-        if sum(1 for q in self.pos.values() if q.side == side) >= p.max_same_side:
+        if sum(1 for q in self.pos.values() if q.side == side and not q.shadow) >= p.max_same_side:
             return
         risk = self._risk(side, coin, row, eq_peak, eq_size)
         if risk is None:
+            self._enter_shadow(ts, coin, side, row)
             return
-        open_risk = sum(q.risk_amt * q.qty / q.qty0 for q in self.pos.values() if not q.tp1_done) / max(eq, 1e-9)
+        open_risk = sum(q.risk_amt * q.qty / q.qty0 for q in self.pos.values()
+                        if not q.tp1_done and not q.shadow) / max(eq, 1e-9)
         risk = min(risk, p.max_open_risk - open_risk)
         if risk < p.risk_floor:
             return
@@ -291,7 +310,7 @@ class Ladder:
         lev, margin, liq = 1.0, 0.0, 0.0
         if self.futures:
             margin_cap = eq * p.margin_cap_pct
-            lev_cap = next(c for lim, c in p.leverage_stages if len(self.closed) < lim)
+            lev_cap = next(c for lim, c in p.leverage_stages if self._real() < lim)
             lev = max(1, math.ceil(notional / margin_cap))
             if lev > lev_cap:
                 lev, notional = lev_cap, margin_cap * lev_cap
@@ -321,6 +340,18 @@ class Ladder:
         self.pos[coin] = pos
         self.orders.append((ts, coin, side * qty, entry))
 
+    def _enter_shadow(self, ts, coin: str, side: int, row) -> None:
+        """켈리가 0 이하라 돈을 넣지 않는 신호도 같은 규칙으로 따라가 R을 기록한다. 이게 없으면 기록이 멈춰 거래가 영영 재개되지 않는다"""
+        stop_pct = min(max(row.stop_raw, self.p.stop_min), self.p.stop_max)
+        entry = self._fill(row.close, side)
+        qty = 1.0 / entry  # 1만큼 산 셈. R배수는 크기와 무관하다
+        r = stop_pct * entry
+        pos = Pos(coin, side, entry, qty, qty, entry - side * r, stop_pct, qty * r, ts,
+                  entry + side * r, entry + side * 2 * r, shadow=True)
+        fee = self.fee
+        pos.pnl -= fee
+        self.pos[coin] = pos
+
     # 봉 하나
     def _manage(self, ts, pos: Pos, row) -> None:
         s = pos.side
@@ -329,21 +360,22 @@ class Ladder:
             fr = self.funding[pos.coin]
             for rate in fr[(fr.index >= ts) & (fr.index < ts + HOUR)].to_numpy():
                 cost = s * pos.qty * row.open * rate
-                self.cash -= cost
+                if not pos.shadow:
+                    self.cash -= cost
+                    self.funding_paid += cost
                 pos.pnl -= cost
                 pos.funding += cost
-                self.funding_paid += cost
         lo, hi = (row.low, row.high) if s > 0 else (row.high, row.low)
         hit_stop = (lo <= pos.stop) if s > 0 else (lo >= pos.stop)
         if hit_stop:
             gap = (row.open < pos.stop) if s > 0 else (row.open > pos.stop)
             fill = row.open if gap else pos.stop
-            if self.futures and ((fill <= pos.liq) if s > 0 else (fill >= pos.liq)):
+            if self.futures and not pos.shadow and ((fill <= pos.liq) if s > 0 else (fill >= pos.liq)):
                 self._liquidate(ts, pos)
             else:
                 self._trade(ts, pos, pos.qty, fill, "STOP" if not pos.tp1_done else "BE")
             return
-        if self.futures and ((lo <= pos.liq) if s > 0 else (lo >= pos.liq)):
+        if self.futures and not pos.shadow and ((lo <= pos.liq) if s > 0 else (lo >= pos.liq)):
             self._liquidate(ts, pos)
             return
         reach = lambda lvl: (hi >= lvl) if s > 0 else (hi <= lvl)  # noqa: E731
@@ -428,8 +460,7 @@ class Ladder:
             self._trade(idx[-1], pos, pos.qty, last_px[c], "END")
         eq_curve[-1] = self.equity(last_px) + transferred
         del cols
-        return Result(self.name, pd.Series(eq_curve, index=idx + HOUR), pd.DataFrame(self.closed), self.orders,
-                      self.transfers, self.fees, self.funding_paid, self.liqs)
+        return self._result(pd.Series(eq_curve, index=idx + HOUR))
 
 
 class Baseline(Ladder):
@@ -517,8 +548,7 @@ class Baseline(Ladder):
         for c, pos in list(self.pos.items()):
             self._trade(idx[-1], pos, pos.qty, last_px[c], "END")
         eq_curve[-1] = self.equity(last_px)
-        return Result(self.name, pd.Series(eq_curve, index=idx + HOUR), pd.DataFrame(self.closed), self.orders, [],
-                      self.fees, self.funding_paid, self.liqs)
+        return self._result(pd.Series(eq_curve, index=idx + HOUR))
 
 
 # ---------------------------------------------------------------- 성적표
@@ -541,6 +571,7 @@ def metrics(r: Result, init: float) -> dict:
         "fees": r.fees,
         "funding": r.funding,
         "to_core": sum(a for _, a in r.transfers),
+        "shadow_trades": len(r.shadow),
     }
 
 
