@@ -9,6 +9,8 @@
 
 ## [Unreleased]
 
+- 공개 저장소 대비: CI에 gitleaks 비밀값 검사를 넣고, `.gitignore`에 키·인증서·로그 파일을 더했다. README에 키는 기기 비밀 저장소에만 두고 거래소 키는 출금 권한 없이 만든다고 적었다.
+
 ## [0.1.0] - 2026-10-14
 
 **필요한 devlog**: `record_trade`가 `exchange`·`currency`·소수 수량을 받는 버전(#254, PR #257). 그 전 devlog에서는 통화가 원화로 남아요. 선물 필드(`market`·`position_side`·`leverage`·`interval`, #260)는 아직 보내지 않고, 선물 체결은 이름·이유 꼬리표("비트코인 선물", "[선물 숏 진입 3x]")로 구분해요.
