@@ -19,6 +19,7 @@
 - 매매 봇 MCP 서버 `python -m devlog_trade.mcp`(stdio, 표준 라이브러리만): `trade_bot_prices`(시세·이동평균), `trade_bot_accounts`(계좌·포지션·평가 손익·AI 사용량), `trade_bot_order`(기본 모의 주문, 실계좌는 서버 `--live`와 상한·`live=true`가 함께 있어야), `trade_bot_ai`(AI 판단 켜고 끄기). 체결은 봇과 같은 길로 `mcp-manual` 전략 이름으로 기록하고, 기본은 devlog에 보내지 않는다(`--record`).
 - `trade-control.json`의 AI 켜고 끄기가 `--ai` 플래그와 `AI_DECISION`보다 먼저 적용된다.
 - 같은 상태 파일을 봇 작업과 대화 주문이 동시에 고치지 않게 잠근다(fcntl, 윈도는 잠그지 않음).
+- 세 겹 거름망 복리법 `coin --rule ladder` (1시간봉 모의 전용, 이슈 #11·#12·#13): 1일 방향·4시간 되돌림·1시간 돌파, ATR 손절과 1/3씩 분할 익절, 켈리 크기와 그림자 거래, 거래마다 레버리지, 하루·주 손실 브레이크, 코어 적립. 캔들에 시가·고가·저가를 더했고, 모의 선물에 일부 정리(`FuturesBroker.reduce`)를 더했다. `jobs.conf`에 비교용 세 계좌 줄을 넣었다.
 
 ### 바뀜
 - 선물 레버리지 상한을 7배에서 5배로 낮췄다(모의·실계좌 같은 값, 민서님 결정 2026-10-15 세 겹 거름망 복리법 Q9). 6배 이상은 거절한다.

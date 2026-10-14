@@ -34,6 +34,9 @@ class Candle:
     open_time: datetime  # UTC
     close_time: datetime  # UTC. 이 시각이 지나야 다 만들어진 봉이다
     close: Decimal
+    open: Decimal | None = None  # 기법(ladder)이 손절·익절·ATR에 쓴다. 예제 전략은 종가만 본다
+    high: Decimal | None = None
+    low: Decimal | None = None
 
 
 Fetch = Callable[[str], object]
@@ -117,7 +120,7 @@ class Binance(Exchange):
         out = []
         for r in rows:  # [여는 시각(ms), 시가, 고가, 저가, 종가, 거래량, 닫는 시각(ms), …]
             opened = datetime.fromtimestamp(int(r[0]) / 1000, timezone.utc)
-            out.append(Candle(opened, opened + step, Decimal(str(r[4]))))
+            out.append(Candle(opened, opened + step, Decimal(str(r[4])), Decimal(str(r[1])), Decimal(str(r[2])), Decimal(str(r[3]))))
         return out
 
 
@@ -148,7 +151,8 @@ class Upbit(Exchange):
         out = []
         for r in rows:  # 최신 봉이 먼저 온다. candle_date_time_utc가 봉 시작 시각
             opened = datetime.fromisoformat(r["candle_date_time_utc"]).replace(tzinfo=timezone.utc)
-            out.append(Candle(opened, opened + step, Decimal(str(r["trade_price"]))))
+            ohl = [None if r.get(k) is None else Decimal(str(r[k])) for k in ("opening_price", "high_price", "low_price")]
+            out.append(Candle(opened, opened + step, Decimal(str(r["trade_price"])), *ohl))
         return out
 
 
