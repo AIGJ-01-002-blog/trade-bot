@@ -18,7 +18,7 @@ from decimal import ROUND_FLOOR, Decimal
 from pathlib import Path
 from typing import Callable
 
-from . import __version__, ai, live
+from . import __version__, ai, ladder, live
 from .broker import Fill, PaperBroker, state_lock
 from .exchanges import COINS, EXCHANGES, INTERVALS, Exchange, ExchangeError
 from .futures import FuturesBroker
@@ -179,12 +179,17 @@ def coin(args: argparse.Namespace) -> int:
     if ex.market == "futures" and not Decimal(1) <= leverage <= MAX_LEVERAGE:
         print(f"레버리지는 1~{MAX_LEVERAGE}배로 주세요.", file=sys.stderr)
         return 2
+    if args.rule == "ladder" and (args.live or args.interval != "1h"):
+        print("세 겹 거름망 기법(--rule ladder)은 1시간봉 모의 계좌에서만 돌아요.", file=sys.stderr)
+        return 2
+    if args.rule == "ladder" and ai.enabled(args):
+        print("세 겹 거름망 기법은 아직 AI 판단 없이 돌아요 (AI 판단 형식은 이슈 #16).", file=sys.stderr)
     if args.live and args.dry_run and not args.testnet:  # 테스트넷은 돈이 오가지 않아 화면에만 볼 수 있다
         print("실거래소 --live는 --dry-run과 함께 쓸 수 없어요. 실계좌 체결은 devlog에 남겨야 해요.", file=sys.stderr)
         return 2
     if args.state is None:
         args.state = live.live_state_name(args.exchange, ex.market, args.interval) if args.live else \
-            f"trade-state-{args.exchange}-{ex.market}-{args.interval}.json"
+            f"trade-state-{'ladder-' if args.rule == 'ladder' else ''}{args.exchange}-{ex.market}-{args.interval}.json"
     try:
         with state_lock(Path(args.state)):  # MCP 주문(devlog_trade.mcp)과 같은 상태 파일을 번갈아 쓴다
             return _coin_session(args, ex, symbols, fee_rate, cash, leverage)
@@ -214,6 +219,15 @@ def _coin_session(args: argparse.Namespace, ex: Exchange, symbols: list[str], fe
               file=sys.stderr)
         return 2
     ok = s.send_all()
+    if args.rule == "ladder":
+        if args.strategy == "ma-cross":
+            args.strategy = ladder.VERSION
+        got, seen = ladder.run(s, ex, symbols, args.limit, int(MAX_LEVERAGE),
+                               lambda k: k.close_time.astimezone(KST).isoformat(timespec="seconds"))
+        ok = s.send_all() and got and ok
+        s.save()
+        print(f"{ex.code} {ex.market} 1h봉 · {', '.join(seen) or '받은 시세 없음'} · {b.describe()}")
+        return 0 if ok else 1
     budget = Decimal(args.budget) if args.budget else ex.default_budget
     rule = MovingAverageCross(window=args.window, stop_loss=Decimal(args.stop_loss), period=f"개 {args.interval}봉")
     try:
@@ -292,6 +306,8 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--market", choices=["spot", "futures"], default="spot", help="현물(spot) 또는 USDT-M 선물(futures, 바이낸스만)")
     c.add_argument("--coins", help=f"거래할 코인, 쉼표로 (기본 {','.join(COINS)})")
     c.add_argument("--symbol", help="마켓 코드를 직접 줄 때, 쉼표로 (예: BTCUSDT 또는 KRW-BTC). 주면 --coins는 무시해요")
+    c.add_argument("--rule", choices=["ma-cross", "ladder"], default="ma-cross",
+                   help="매매 규칙. ma-cross: 이동평균선 교차(예제), ladder: 세 겹 거름망 복리법(1시간봉 모의 전용)")
     c.add_argument("--interval", choices=list(INTERVALS), default="1h", help="봉 간격")
     c.add_argument("--limit", type=int, default=200, help="종목마다 한 번에 받을 봉 수 (전략을 데우는 데 씀, 업비트는 200까지)")
     c.add_argument("--state", help="모의 계좌 상태 파일. 기본 trade-state-<거래소>-<시장>-<봉>.json")

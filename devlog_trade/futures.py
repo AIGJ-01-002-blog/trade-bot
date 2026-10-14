@@ -90,6 +90,23 @@ class FuturesBroker:
         return Fill(f"paper-{uuid.uuid4()}", symbol, pos.name, "SELL" if pos.side == "LONG" else "BUY", pos.quantity, price, fee, pnl,
                     f"[선물 {label} {tag}] {reason}", at, self.exchange, self.currency)
 
+    def reduce(self, symbol: str, quantity: Decimal, price: Decimal, reason: str, at: str) -> Fill | None:
+        """일부만 정리한다(분할 익절). 증거금도 같은 비율로 푼다. 남는 수량이 없으면 close와 같다"""
+        pos = self.positions.get(symbol)
+        if pos is None or quantity <= 0:
+            return None
+        if quantity >= pos.quantity:
+            return self.close(symbol, price, reason, at)
+        fee = self._money(quantity * price * self.fee_rate)
+        pnl = self._money((price - pos.entry) * quantity * pos.direction - fee)
+        freed = self._money(pos.margin * quantity / pos.quantity)
+        pos.quantity -= quantity
+        pos.margin -= freed
+        self.cash += pnl
+        label = "롱" if pos.side == "LONG" else "숏"
+        return Fill(f"paper-{uuid.uuid4()}", symbol, pos.name, "SELL" if pos.side == "LONG" else "BUY", quantity, price, fee, pnl,
+                    f"[선물 {label} 일부 정리] {reason}", at, self.exchange, self.currency)
+
     def liquidation_due(self, symbol: str, price: Decimal) -> bool:
         pos = self.positions.get(symbol)
         return pos is not None and pos.unrealized(price) <= -pos.margin
