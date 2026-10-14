@@ -9,6 +9,11 @@
 
 ## [Unreleased]
 
+### 추가
+- 실계좌 주문 모듈 `devlog_trade/live.py` (#264): 바이낸스 현물·USDT-M 선물(롱·숏), 업비트 원화 현물에 시장가 주문. 모의 `PaperBroker`·`FuturesBroker`와 같은 모양의 `LiveBroker`·`LiveFuturesBroker`이고, 체결은 실제 체결가·수량·수수료·체결 시각으로 `mode=LIVE` 기록. `coin` 명령 연결은 아직이라 `--live`는 여전히 거절돼요.
+- 안전장치: 메인넷은 `DEVLOG_TRADE_LIVE=1`과 `--live` 둘 다(테스트넷은 `--live --testnet`), 출금 권한 키 거절, 주문당 금액·손실 상한과 하루 손실 상한(기본값 없음), 선물 1~7배와 격리 마진, 같은 봉 중복 주문 막기(주문 번호를 종목·방향·봉 시각으로)
+- `python -m devlog_trade.live check`(주문 없이 키·권한·잔고 확인), `resume`(손실 상한으로 멈춘 진입 다시 열기). 사용법은 `LIVE.md`
+
 ## [0.1.0] - 2026-10-14
 
 **필요한 devlog**: `record_trade`가 `exchange`·`currency`·소수 수량을 받는 버전(#254, PR #257). 그 전 devlog에서는 통화가 원화로 남아요. 선물 필드(`market`·`position_side`·`leverage`·`interval`, #260)는 아직 보내지 않고, 선물 체결은 이름·이유 꼬리표("비트코인 선물", "[선물 숏 진입 3x]")로 구분해요.
