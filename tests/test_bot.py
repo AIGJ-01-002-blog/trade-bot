@@ -107,6 +107,15 @@ class ExchangeTest(unittest.TestCase):
         self.assertEqual([c.close for c in candles][:3], [Decimal(100), Decimal(99), Decimal(98)])
         self.assertEqual(ex.coin_name("KRW-BTC"), "비트코인")
 
+    def test_region_block_is_explained(self):
+        import urllib.error
+        from devlog_trade import exchanges
+
+        def blocked(*args, **kwargs):
+            raise urllib.error.HTTPError("https://fapi.binance.com", 451, "", {}, None)
+        with mock.patch("urllib.request.urlopen", blocked), self.assertRaisesRegex(ExchangeError, "이 지역에서는"):
+            exchanges.http_get_json("https://fapi.binance.com/fapi/v1/klines")
+
     def test_wrong_market_or_interval_is_refused(self):
         with self.assertRaises(ExchangeError):
             Binance(fetch=lambda url: []).fetch_candles("KRW-BTC", "1h", 10)

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -38,7 +39,13 @@ Fetch = Callable[[str], object]
 
 def http_get_json(url: str, timeout: float = 15) -> object:
     req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "devlog-trade-bot"})
-    with urllib.request.urlopen(req, timeout=timeout) as res:  # noqa: S310 (거래소 공개 시세 주소만 부른다)
+    try:
+        res = urllib.request.urlopen(req, timeout=timeout)  # noqa: S310 (거래소 공개 시세 주소만 부른다)
+    except urllib.error.HTTPError as e:
+        if e.code in (403, 451):  # 바이낸스는 서비스하지 않는 지역(미국 등)에서 451을 준다
+            raise ExchangeError(f"이 지역에서는 이 시세 주소가 막혀 있어요 (HTTP {e.code}). 한국 등 서비스 지역에서 돌려 주세요.") from e
+        raise
+    with res:
         try:
             return json.loads(res.read().decode("utf-8"))
         except ValueError as e:
