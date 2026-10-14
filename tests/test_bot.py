@@ -440,6 +440,17 @@ class CoinCliTest(unittest.TestCase):
         self.assertEqual(saved["market"], "futures")
         self.assertEqual(saved["positions"]["BTCUSDT"]["side"], "SHORT")  # 마지막에 꺾여 숏을 들고 있다
 
+    def test_live_broker_never_trades_past_candles_of_a_new_symbol(self):
+        class Live(PaperBroker):
+            mode = "LIVE"
+        broker = Live(cash=Decimal(1000), currency="USDT", exchange="BINANCE")
+        s = cli.Session.__new__(cli.Session)
+        s.broker, s.pending = broker, []
+        bars = [Bar(f"2026-10-13T{i:02d}:00:00Z", "BTCUSDT", "비트코인", Decimal(c)) for i, c in enumerate(CLOSES[:-1])]
+        s.trade_coin(MovingAverageCross(window=3), "BTCUSDT", bars, Decimal(100), lambda bar: bar.date)
+        self.assertEqual(s.pending, [])  # 모의라면 매수·매도가 나왔을 봉들
+        self.assertEqual(broker.last_seen["BTCUSDT"], bars[-1].date)
+
     def test_futures_rules(self):
         code, _, err = self.run_coin(BinanceFutures(fetch=lambda url: []), "--market", "futures", "--leverage", "5", "--dry-run")
         self.assertEqual(code, 2)

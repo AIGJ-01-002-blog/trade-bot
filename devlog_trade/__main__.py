@@ -103,6 +103,9 @@ class Session:
         """코인 한 종목: 받은 봉 전체로 전략을 데우고, 그 종목의 마지막 봉 시각보다 뒤인 봉에서만 체결한다"""
         broker = self.broker
         seen = broker.last_seen.get(symbol, "")
+        if not seen and getattr(broker, "mode", "PAPER") == "LIVE" and bars:
+            # 실계좌는 처음 보는 종목의 지난 봉으로 주문하지 않는다. 받은 봉으로 전략만 데우고 다음 봉부터 거래한다
+            seen = bars[-1].date
         for bar in bars:
             fresh = bar.date > seen
             at = executed_at(bar)
