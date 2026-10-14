@@ -5,7 +5,7 @@
 - 출금 권한이 켜진 키는 주문 전에 거절한다.
 - 주문당 금액 상한(--max-order), 주문당 손실 상한(--max-order-loss), 하루 손실 상한(--max-daily-loss, 한국 시간 기준)을 넘으면 새 매수를 멈춘다.
   청산(매도)은 위험을 줄이는 쪽이라 멈추지 않는다.
-- 선물 레버리지는 7배까지만 쓰고(민서님 결정, 2026-10-14), 종목마다 격리 마진으로 맞춰 한 포지션의 손실이 그 증거금을 넘지 않게 한다.
+- 선물 레버리지는 5배까지만 쓰고(민서님 결정: 2026-10-14 7배, 2026-10-15 세 겹 거름망 복리법에서 5배로 낮춤), 종목마다 격리 마진으로 맞춰 한 포지션의 손실이 그 증거금을 넘지 않게 한다.
 - 키는 환경 변수로만 받는다. 파일·저장소·로그에 쓰지 않는다.
 
 같은 봉을 다시 처리할 때 주문이 두 번 나가지 않도록, 주문 번호(client order id·identifier)를 종목·방향·봉 시각으로 정하고
@@ -35,7 +35,7 @@ from .broker import Fill, PaperBroker, Position
 from .futures import FuturesBroker, FuturesPosition
 
 KST = timezone(timedelta(hours=9))
-LEVERAGE_CAP = 7  # 민서님 결정(2026-10-14): 3배에서 7배로
+LEVERAGE_CAP = 5  # 민서님 결정: 3배 → 7배(2026-10-14) → 5배(2026-10-15, 세 겹 거름망 복리법 Q9)
 LIVE_ENV = "DEVLOG_TRADE_LIVE"
 
 
@@ -637,7 +637,7 @@ def open_live(args: argparse.Namespace, exchange: str, market: str, state: Path,
         raise LiveRefused(f"{exchange} {market} 실계좌 주문은 아직 없어요. 바이낸스 현물·선물, 업비트 현물만 돼요.")
     leverage = Decimal(getattr(args, "leverage", None) or 1)
     if leverage != leverage.to_integral_value():
-        raise LiveRefused("실계좌 레버리지는 1~7배 사이 정수로 넣어 주세요.")
+        raise LiveRefused(f"실계좌 레버리지는 1~{LEVERAGE_CAP}배 사이 정수로 넣어 주세요.")
     if market != "futures" and leverage != 1:
         raise LiveRefused("레버리지는 선물에서만 써요.")
     limits = Limits(Decimal(args.max_order or 0), Decimal(args.max_order_loss or 0), Decimal(args.max_daily_loss or 0), int(leverage))

@@ -99,9 +99,9 @@ class SwitchTest(unittest.TestCase):
     def test_limits_are_required_and_leverage_is_capped(self):
         with self.assertRaisesRegex(LiveRefused, "--max-daily-loss"):
             Limits(Decimal(100), Decimal(20), Decimal(0))
-        with self.assertRaisesRegex(LiveRefused, "1~7배"):
-            Limits(Decimal(100), Decimal(20), Decimal(50), leverage=8)
-        Limits(Decimal(100), Decimal(20), Decimal(50), leverage=7)
+        with self.assertRaisesRegex(LiveRefused, "1~5배"):
+            Limits(Decimal(100), Decimal(20), Decimal(50), leverage=6)
+        Limits(Decimal(100), Decimal(20), Decimal(50), leverage=5)
 
     def test_keys_come_only_from_env(self):
         with mock.patch.dict(os.environ, {}, clear=True):
