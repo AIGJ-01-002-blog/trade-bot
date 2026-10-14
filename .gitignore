@@ -3,3 +3,4 @@ demo-state*.json
 __pycache__/
 .env
 data/
+trade-ai-usage*.json*
