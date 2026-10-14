@@ -36,7 +36,7 @@ python3 -m devlog_trade coin --exchange binance --coins BTC,ETH --interval 4h --
 | 시드 `--cash` | 바이낸스 1,000 USDT · 업비트 1,000,000원 (계좌 하나에 코인 5종이 같이 들어요) | |
 | 한 번 들어갈 금액 `--budget` | 바이낸스 100 USDT · 업비트 100,000원 (선물은 증거금) | |
 | 수수료 `--fee-rate` | 바이낸스 현물 0.1% · 선물 0.05% · 업비트 0.05%, 매도세 없음 | |
-| 레버리지 `--leverage` | 선물만, 1~7배 (실계좌와 같은 상한) | 1배 |
+| 레버리지 `--leverage` | 선물만, 1~5배 (실계좌와 같은 상한) | 1배 |
 
 - 시세는 API 키 없이 공개 캔들만 받아요. 바이낸스 현물 `data-api.binance.vision/api/v3/klines`, 선물 `fapi.binance.com/fapi/v1/klines`, 업비트 `api.upbit.com/v1/candles/…`. 선물 시세 주소는 나라에 따라 막힐 수 있어요.
 - **다 만들어진 봉의 종가로만** 판단하고, 그 봉이 닫힌 시각을 체결 시각으로 남겨요. 진행 중인 봉으로는 거래하지 않아요.
@@ -230,7 +230,7 @@ Windows는 작업 스케줄러에서 같은 명령을 걸고, 토큰은 사용�
 
 ## 실계좌 주문
 
-기본은 꺼져 있어요. `coin` 명령에 `--live`와 세 가지 손실 상한(`--max-order`·`--max-order-loss`·`--max-daily-loss`)을 주고, 실거래소는 환경 변수 `DEVLOG_TRADE_LIVE=1`까지 있어야 주문이 나가요. 바이낸스 현물·선물(1~7배), 업비트 현물을 받고, 키는 출금 권한 없이 만들어 기기 비밀 저장소에만 둬요. 자세한 건 [LIVE.md](LIVE.md)에 있어요.
+기본은 꺼져 있어요. `coin` 명령에 `--live`와 세 가지 손실 상한(`--max-order`·`--max-order-loss`·`--max-daily-loss`)을 주고, 실거래소는 환경 변수 `DEVLOG_TRADE_LIVE=1`까지 있어야 주문이 나가요. 바이낸스 현물·선물(1~5배), 업비트 현물을 받고, 키는 출금 권한 없이 만들어 기기 비밀 저장소에만 둬요. 자세한 건 [LIVE.md](LIVE.md)에 있어요.
 종가 CSV 모드(`run`)는 모의 체결만 해요.
 
 ## 테스트

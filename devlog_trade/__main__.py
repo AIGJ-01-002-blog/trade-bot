@@ -26,7 +26,7 @@ from .journal import Journal, JournalError
 from .strategy import Bar, MovingAverageCross, read_bars
 
 KST = timezone(timedelta(hours=9))
-MAX_LEVERAGE = Decimal(7)  # 민서님 결정(2026-10-14): 선물은 7배까지. 실계좌(live.py)와 같게 둔다
+MAX_LEVERAGE = Decimal(live.LEVERAGE_CAP)  # 민서님 결정: 선물은 5배까지(2026-10-15). 실계좌(live.py)와 같은 값
 COIN_STEP = Decimal("0.00000001")  # 코인 수량·USDT 금액은 소수 8자리까지
 LIVE_REFUSED = "실계좌 주문은 coin 명령에서만 돼요(바이낸스 현물·선물, 업비트 현물). 종가 CSV 모드는 모의 체결만 해요."
 
@@ -298,7 +298,7 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--cash", help="처음 모의 현금. 기본 바이낸스 1000 USDT, 업비트 1,000,000원")
     c.add_argument("--budget", help="한 번 들어갈 때 쓸 금액(선물은 증거금). 기본 바이낸스 100 USDT, 업비트 100,000원")
     c.add_argument("--fee-rate", help="수수료율. 기본 바이낸스 현물 0.001, 선물 0.0005, 업비트 0.0005")
-    c.add_argument("--leverage", default="1", help="선물 레버리지 (1~7배, 기본 1배)")
+    c.add_argument("--leverage", default="1", help=f"선물 레버리지 (1~{live.LEVERAGE_CAP}배, 기본 1배)")
     _common(c)
     c.add_argument("--live", action="store_true",
                    help=f"실계좌 주문 (기본 꺼짐). 실거래소는 {live.LIVE_ENV}=1도 있어야 하고, --max-order·--max-order-loss·--max-daily-loss가 필요해요")
