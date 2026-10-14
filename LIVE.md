@@ -22,6 +22,7 @@
 - 세 상한은 기본값이 없어요. 실계좌는 상한을 직접 정해야 돌아요.
 - 청산(매도)은 위험을 줄이는 쪽이라 멈춘 동안에도 나가요.
 - 같은 봉을 다시 처리해도 주문이 두 번 나가지 않아요. 주문 번호(바이낸스 `newClientOrderId`, 업비트 `identifier`)를 종목·방향·봉 시각으로 정하고, 주문 전에 그 번호로 낸 주문이 있는지 먼저 찾아요. 주문 직후 연결이 끊겨도 번호로 찾아서 결과를 이어 받아요.
+- 기록은 실제 체결가·체결 수량·수수료로 남겨요. 체결 번호는 `live-<거래소>-<주문번호>`예요.
 
 ## 처음 상한 추천값 (시드 20만~50만 원)
 
@@ -45,7 +46,6 @@ python3 -m devlog_trade coin --exchange upbit --live --max-order 30000 --max-ord
 # 바이낸스 선물, 시드 약 200 USDT, 3배로 시작
 python3 -m devlog_trade coin --exchange binance --market futures --leverage 3 --live --max-order 100 --max-order-loss 5 --max-daily-loss 12
 ```
-- 기록은 실제 체결가·체결 수량·수수료로 남겨요. 체결 번호는 `live-<거래소>-<주문번호>`예요.
 
 ## 키 만들기
 
