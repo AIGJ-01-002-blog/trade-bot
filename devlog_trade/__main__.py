@@ -106,7 +106,7 @@ class Session:
         for bar in bars:
             fresh = bar.date > seen
             at = executed_at(bar)
-            if isinstance(broker, FuturesBroker):
+            if broker.market == "futures":  # 모의 선물·실계좌 선물 브로커가 같은 open/close 모양을 쓴다
                 if fresh and broker.liquidation_due(symbol, bar.close):
                     self._add(broker.close(symbol, bar.close, "손실이 증거금을 다 씀", at, liquidated=True))
                 pos = broker.positions.get(symbol)
