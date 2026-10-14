@@ -179,8 +179,8 @@ def coin(args: argparse.Namespace) -> int:
     if ex.market == "futures" and not Decimal(1) <= leverage <= MAX_LEVERAGE:
         print(f"레버리지는 1~{MAX_LEVERAGE}배로 주세요.", file=sys.stderr)
         return 2
-    if args.live and args.dry_run:
-        print("--live와 --dry-run은 함께 쓸 수 없어요. 실계좌 체결은 devlog에 남겨야 해요.", file=sys.stderr)
+    if args.live and args.dry_run and not args.testnet:  # 테스트넷은 돈이 오가지 않아 화면에만 볼 수 있다
+        print("실거래소 --live는 --dry-run과 함께 쓸 수 없어요. 실계좌 체결은 devlog에 남겨야 해요.", file=sys.stderr)
         return 2
     if args.state is None:
         args.state = live.live_state_name(args.exchange, ex.market, args.interval) if args.live else \

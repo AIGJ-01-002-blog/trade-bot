@@ -66,7 +66,7 @@ DEVLOG_TRADE_LIVE=1 python3 -m devlog_trade coin --exchange binance --market fut
 
 - 상태 파일 기본 이름은 `trade-live-<거래소>-<시장>-<봉>.json`이라 모의 계좌(`trade-state-…`)와 섞이지 않아요.
 - 처음 도는 종목은 받은 봉으로 전략만 데우고, 그다음 닫히는 봉부터 주문해요. 지난 봉으로 주문하지 않아요.
-- devlog 매매 일지에는 `mode=LIVE`로 남아 화면에 "실계좌"로 따로 보여요. `--live`와 `--dry-run`은 함께 쓸 수 없어요.
+- devlog 매매 일지에는 `mode=LIVE`로 남아 화면에 "실계좌"로 따로 보여요. 실거래소 `--live`는 `--dry-run`과 함께 쓸 수 없어요. 테스트넷은 `--dry-run`을 붙이면 devlog에 보내지 않고 화면에만 보여요.
 - 켜는 조건·상한·키·출금 권한 중 하나라도 맞지 않으면 주문 없이 멈춰요(종료 코드 2).
 
 ## 테스트

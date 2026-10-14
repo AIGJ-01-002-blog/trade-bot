@@ -11,4 +11,5 @@ GEMINI_API_KEY="$(security find-generic-password -a "$USER" -s devlog-trade-bot-
 [ -n "$GEMINI_API_KEY" ] && export GEMINI_API_KEY
 export PYTHONUTF8=1
 echo "=== $(date '+%Y-%m-%d %H:%M:%S')"
-exec /usr/bin/caffeinate -i /usr/bin/env python3 -m devlog_trade jobs "${JOBS_FILE:-$BOT_DIR/jobs.conf}"
+PY="$("$BOT_DIR/macos/find-python.sh")" || { echo "Python 3.10 이상을 찾지 못했어요. brew install python 또는 python.org 설치 뒤 다시 돌려요."; exit 1; }
+exec /usr/bin/caffeinate -i "$PY" -m devlog_trade jobs "${JOBS_FILE:-$BOT_DIR/jobs.conf}"

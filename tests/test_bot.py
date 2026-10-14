@@ -384,6 +384,23 @@ class CoinCliTest(unittest.TestCase):
             self.assertIn("--dry-run", err)
             self.assertFalse(Path(state).exists())
 
+    def test_testnet_can_run_on_screen_only(self):
+        from devlog_trade import live
+        from tests.test_live import FakeExchange, binance_spot
+        fx = FakeExchange()
+        binance_spot(fx)
+        real_open = live.open_live
+        env = {"BINANCE_TESTNET_API_KEY": "k", "BINANCE_TESTNET_API_SECRET": "s"}
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict("os.environ", env, clear=True), \
+                mock.patch.object(live, "open_live", lambda *a: real_open(*a, send=fx)):
+            common = ("--live", "--testnet", "--dry-run", "--state", str(Path(d) / "t.json"), "--window", "3",
+                      "--max-order", "100", "--max-order-loss", "20", "--max-daily-loss", "50")
+            self.run_coin(self.binance(CLOSES, len(CLOSES) - 0.5), *common)
+            code, out, err = self.run_coin(self.binance(CLOSES, len(CLOSES) + 0.5), *common)
+        self.assertEqual(code, 0, err)
+        self.assertIn("[dry-run]", out)  # 테스트넷 체결을 devlog에 보내지 않고 화면에만
+        self.assertEqual(len([c for c in fx.calls if c[0] == "POST"]), 1)
+
     def test_live_on_testnet_warms_up_then_orders_and_records_live(self):
         """가짜 테스트넷: 첫 실행은 지난 봉으로 주문하지 않고, 새로 닫힌 봉에서만 주문하고 mode=LIVE로 남긴다"""
         from devlog_trade import live
