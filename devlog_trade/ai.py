@@ -5,7 +5,9 @@
 - AI 응답이 형식에 맞지 않거나 늦으면 관망한다(주문하지 않는다). 규칙으로 대신 사지 않는다.
 - AI가 낸 이유는 체결의 reason으로 record_trade에 가서 매매 일지에 보인다.
 - 기본 제공자는 Gemini(gemini-2.5-flash-lite, devlog 서버가 쓰는 모델과 같음). 맥북에서 Ollama를 띄웠으면 AI_PROVIDER=ollama.
-  키는 환경 변수 GEMINI_API_KEY로만 넘긴다. 파일이나 저장소에 적지 않는다.
+  상위 모델은 AI_PROVIDER=anthropic(기본 claude-opus-5-5)·openai(기본 gpt-5)로 고른다. 모델별 성과는 모의 계좌를 나눠 비교한다.
+  키는 환경 변수 GEMINI_API_KEY·ANTHROPIC_API_KEY·OPENAI_API_KEY로만 넘긴다. 파일이나 저장소에 적지 않는다.
+- 표준 라이브러리만 쓰는 봇이라 제공자 SDK 대신 각 제공자의 HTTP API를 urllib로 부른다.
 """
 from __future__ import annotations
 
@@ -28,6 +30,15 @@ REASON_MAX = 280  # devlog 매매 일지 이유는 300자까지. 앞에 붙는 "
 
 # 100만 토큰당 달러. 쓰는 모델 가격이 바뀌면 --ai-price-in/--ai-price-out으로 바꾼다
 GEMINI_PRICE = {"gemini-2.5-flash-lite": (Decimal("0.10"), Decimal("0.40")), "gemini-2.5-flash": (Decimal("0.30"), Decimal("2.50"))}
+# Anthropic 공식 표(2026-10 기준). 생각(thinking) 토큰은 출력으로 과금된다
+ANTHROPIC_PRICE = {"claude-opus-5-5": (Decimal("4"), Decimal("20")), "claude-sonnet-5-5": (Decimal("2"), Decimal("10")),
+                   "claude-haiku-5-5": (Decimal("0.10"), Decimal("0.50"))}
+# OpenAI는 여러 가격 비교 사이트가 같게 적은 GPT-5 계열 값(2026-10). 새 모델을 쓰면 --ai-price-in/--ai-price-out으로 넣는다
+OPENAI_PRICE = {"gpt-5": (Decimal("1.25"), Decimal("10")), "gpt-5-mini": (Decimal("0.25"), Decimal("2")),
+                "gpt-5-nano": (Decimal("0.05"), Decimal("0.40"))}
+# 모르는 모델은 그 제공자의 가장 비싼 값으로 어림한다(예산을 적게 잡아 넘치지 않게)
+PRICE_FALLBACK = {"gemini": GEMINI_PRICE["gemini-2.5-flash"], "anthropic": ANTHROPIC_PRICE["claude-opus-5-5"],
+                  "openai": (Decimal("5"), Decimal("30"))}
 
 SYSTEM_PROMPT = (
     "너는 코인 모의매매 봇의 판단 보조다. 방금 닫힌 봉까지의 종가, 포지션, 평균 단가, 쓸 수 있는 현금을 보고 "
@@ -42,9 +53,12 @@ ACTION_HELP = {
 }
 
 
-def response_schema(actions: tuple[str, ...]) -> dict:
-    return {"type": "object", "properties": {"action": {"type": "string", "enum": list(actions)}, "reason": {"type": "string"}},
-            "required": ["action", "reason"]}
+def response_schema(actions: tuple[str, ...], strict: bool = False) -> dict:
+    schema = {"type": "object", "properties": {"action": {"type": "string", "enum": list(actions)}, "reason": {"type": "string"}},
+              "required": ["action", "reason"]}
+    if strict:  # Anthropic·OpenAI 구조화 출력은 추가 속성을 막아야 받는다
+        schema["additionalProperties"] = False
+    return schema
 
 
 class AiError(RuntimeError):
@@ -120,8 +134,85 @@ class Gemini:
         return Reply(action, reason, int(usage.get("promptTokenCount", 0)), int(usage.get("candidatesTokenCount", 0)))
 
     def cost_krw(self, reply: Reply) -> Decimal:
-        usd = (reply.tokens_in * self.price[0] + reply.tokens_out * self.price[1]) / Decimal(1_000_000)
-        return usd * self.usd_krw
+        return usd_cost_krw(reply, self.price, self.usd_krw)
+
+
+def usd_cost_krw(reply: "Reply", price: tuple[Decimal, Decimal], usd_krw: Decimal) -> Decimal:
+    return (reply.tokens_in * price[0] + reply.tokens_out * price[1]) / Decimal(1_000_000) * usd_krw
+
+
+class Anthropic:
+    """Claude Messages API. 생각은 끌 수 없는 모델이라 effort=low로 짧게 생각하게 하고, 답은 JSON 스키마로 받는다.
+    안전 분류기가 거절하면 같은 요청을 다른 모델이 이어 받도록 fallbacks="default"를 켠다(Opus 5.5·Sonnet 5.5)"""
+
+    FALLBACK_MODELS = ("claude-opus-5-5", "claude-sonnet-5-5")
+
+    def __init__(self, api_key: str, model: str = "claude-opus-5-5", timeout: float = 90, post: Post = http_post_json,
+                 price: tuple[Decimal, Decimal] | None = None, usd_krw: Decimal = Decimal(1400), effort: str = "low"):
+        if not api_key:
+            raise AiError("Claude로 판단하려면 ANTHROPIC_API_KEY 환경 변수에 키를 넣어 주세요.")
+        self.api_key, self.model, self.timeout, self.post, self.effort = api_key, model_path(model), timeout, post, effort
+        self.price = price or ANTHROPIC_PRICE.get(model, PRICE_FALLBACK["anthropic"])
+        self.usd_krw = usd_krw
+        self.label = f"anthropic:{model}"
+
+    def ask(self, prompt: str, actions: tuple[str, ...] = ACTIONS["spot"]) -> Reply:
+        body = {"model": self.model, "max_tokens": 8000, "system": SYSTEM_PROMPT,
+                "messages": [{"role": "user", "content": prompt}],
+                "output_config": {"effort": self.effort,
+                                  "format": {"type": "json_schema", "schema": response_schema(actions, strict=True)}}}
+        headers = {"x-api-key": self.api_key, "anthropic-version": "2023-06-01"}
+        if self.model in self.FALLBACK_MODELS:
+            body["fallbacks"] = "default"
+            headers["anthropic-beta"] = "server-side-fallback-2026-07-01"
+        data = self.post("https://api.anthropic.com/v1/messages", body, headers, self.timeout)
+        usage = data.get("usage") or {}
+        if data.get("stop_reason") == "refusal":
+            raise AiError(f"Claude가 답을 거절했어요: {(data.get('stop_details') or {}).get('category')}")
+        text = "".join(b.get("text", "") for b in data.get("content") or [] if b.get("type") == "text")
+        if not text:
+            raise AiError(f"Claude 답에 내용이 없어요: {str(data)[:120]}")
+        action, reason = parse_reply(text, actions)
+        return Reply(action, reason, int(usage.get("input_tokens", 0)), int(usage.get("output_tokens", 0)))
+
+    def cost_krw(self, reply: Reply) -> Decimal:
+        return usd_cost_krw(reply, self.price, self.usd_krw)
+
+
+class OpenAI:
+    """OpenAI Chat Completions. ChatGPT Plus 구독과는 별개로 API 키(종량제)가 있어야 한다.
+    추론 모델(gpt-5 계열·o 계열)은 reasoning_effort=low로 짧게 생각하게 한다"""
+
+    def __init__(self, api_key: str, model: str = "gpt-5", timeout: float = 90, post: Post = http_post_json,
+                 price: tuple[Decimal, Decimal] | None = None, usd_krw: Decimal = Decimal(1400)):
+        if not api_key:
+            raise AiError("GPT로 판단하려면 OPENAI_API_KEY 환경 변수에 API 키를 넣어 주세요. ChatGPT Plus 구독으로는 API를 쓸 수 없어요.")
+        self.api_key, self.model, self.timeout, self.post = api_key, model_path(model), timeout, post
+        self.price = price or OPENAI_PRICE.get(model, PRICE_FALLBACK["openai"])
+        self.usd_krw = usd_krw
+        self.label = f"openai:{model}"
+
+    def ask(self, prompt: str, actions: tuple[str, ...] = ACTIONS["spot"]) -> Reply:
+        body = {"model": self.model, "max_completion_tokens": 4000,
+                "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
+                "response_format": {"type": "json_schema", "json_schema": {
+                    "name": "trade_decision", "strict": True, "schema": response_schema(actions, strict=True)}}}
+        if self.model.startswith(("gpt-5", "o")):
+            body["reasoning_effort"] = "low"
+        data = self.post("https://api.openai.com/v1/chat/completions", body, {"Authorization": f"Bearer {self.api_key}"},
+                         self.timeout)
+        usage = data.get("usage") or {}
+        try:
+            message = data["choices"][0]["message"]
+        except (KeyError, IndexError, TypeError) as e:
+            raise AiError(f"GPT 답에 내용이 없어요: {str(data)[:120]}") from e
+        if message.get("refusal"):
+            raise AiError(f"GPT가 답을 거절했어요: {str(message['refusal'])[:80]}")
+        action, reason = parse_reply(str(message.get("content") or ""), actions)
+        return Reply(action, reason, int(usage.get("prompt_tokens", 0)), int(usage.get("completion_tokens", 0)))
+
+    def cost_krw(self, reply: Reply) -> Decimal:
+        return usd_cost_krw(reply, self.price, self.usd_krw)
 
 
 class Ollama:
@@ -292,8 +383,11 @@ class AiStrategy:
 def add_args(p: argparse.ArgumentParser) -> None:
     g = p.add_argument_group("AI 매매 판단 (#263)")
     g.add_argument("--ai", choices=("on", "off"), help="AI 매매 판단. 기본은 환경 변수 AI_DECISION, 없으면 off")
-    g.add_argument("--ai-provider", choices=("gemini", "ollama"), help="기본은 환경 변수 AI_PROVIDER, 없으면 gemini")
-    g.add_argument("--ai-model", help="기본 gemini-2.5-flash-lite, Ollama는 qwen2.5:7b (환경 변수 AI_MODEL)")
+    g.add_argument("--ai-provider", choices=PROVIDERS, help="기본은 환경 변수 AI_PROVIDER, 없으면 gemini")
+    g.add_argument("--ai-model", help="기본 gemini-2.5-flash-lite, anthropic은 claude-opus-5-5, openai는 gpt-5, "
+                                      "Ollama는 qwen2.5:7b (환경 변수 AI_MODEL)")
+    g.add_argument("--ai-price-in", help="모델 입력 가격(100만 토큰당 달러). 표에 없는 모델이면 넣어 주세요")
+    g.add_argument("--ai-price-out", help="모델 출력 가격(100만 토큰당 달러, 생각 토큰 포함)")
     g.add_argument("--ai-daily-calls", type=int, default=int(os.environ.get("AI_DAILY_CALLS", "2000")),
                    help="하루 AI 호출 상한. 모든 코인·거래소 합계 (기본 2000)")
     g.add_argument("--ai-monthly-krw", default=os.environ.get("AI_MONTHLY_KRW", "30000"), help="월 AI 예산(원). 기본 30000")
@@ -310,12 +404,23 @@ def eligible(interval: str, intervals: dict[str, timedelta]) -> bool:
     return interval in intervals and intervals[interval] >= MIN_AI_INTERVAL
 
 
+PROVIDERS = ("gemini", "anthropic", "openai", "ollama")
+
+
 def make_client(args: argparse.Namespace) -> Client:
     provider = (args.ai_provider or os.environ.get("AI_PROVIDER", "gemini")).lower()
+    if provider not in PROVIDERS:
+        raise AiError(f"AI 제공자는 {', '.join(PROVIDERS)} 중 하나예요.")
     model = args.ai_model or os.environ.get("AI_MODEL")
+    price_in, price_out = getattr(args, "ai_price_in", None), getattr(args, "ai_price_out", None)
+    price = (Decimal(price_in), Decimal(price_out)) if price_in and price_out else None
     if provider == "ollama":
         return Ollama(os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"), model or "qwen2.5:7b")
-    return Gemini(os.environ.get("GEMINI_API_KEY", ""), model or "gemini-2.5-flash-lite")
+    if provider == "anthropic":
+        return Anthropic(os.environ.get("ANTHROPIC_API_KEY", ""), model or "claude-opus-5-5", price=price)
+    if provider == "openai":
+        return OpenAI(os.environ.get("OPENAI_API_KEY", ""), model or "gpt-5", price=price)
+    return Gemini(os.environ.get("GEMINI_API_KEY", ""), model or "gemini-2.5-flash-lite", price=price)
 
 
 def wrap(args: argparse.Namespace, rule, interval: str, intervals: dict[str, timedelta], broker) -> tuple[object, str]:

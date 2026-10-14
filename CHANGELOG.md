@@ -15,6 +15,8 @@
 - `python -m devlog_trade.live check`(주문 없이 키·권한·잔고 확인), `resume`(손실 상한으로 멈춘 진입 다시 열기). 사용법은 `LIVE.md`
 - 공개 저장소 대비: CI에 gitleaks 비밀값 검사를 넣고, `.gitignore`에 키·인증서·로그 파일을 더했다. README에 키는 기기 비밀 저장소에만 두고 거래소 키는 출금 권한 없이 만든다고 적었다.
 
+- AI 판단 모델 고르기: `--ai-provider anthropic`(기본 `claude-opus-5-5`)·`openai`(기본 `gpt-5`)를 더했다. 키는 `ANTHROPIC_API_KEY`·`OPENAI_API_KEY`(맥은 키체인 `devlog-trade-bot-anthropic`·`devlog-trade-bot-openai`), 표에 없는 모델 가격은 `--ai-price-in`·`--ai-price-out`. 기본은 그대로 Gemini. README에 모델별 비용과 모의 계좌 비교 방법을 적었다.
+
 ### 고침
 - 맥 launchd가 기본 `/usr/bin/python3`(3.9)를 잡아 봇이 돌지 않던 문제: `macos/find-python.sh`가 Homebrew·python.org의 3.10 이상을 찾고, 없으면 `install.sh`가 설치 안내와 함께 멈춘다.
 

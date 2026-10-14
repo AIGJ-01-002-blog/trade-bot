@@ -103,6 +103,36 @@ python3 -m devlog_trade coin --exchange binance --market futures --interval 4h -
 - `jobs.conf`에서는 줄마다 `--ai on`을 붙여 켜요. 맥 launchd는 Gemini 키를 키체인에서 읽어요: `security add-generic-password -a "$USER" -s devlog-trade-bot-gemini -w`. Docker는 `.env`에 `GEMINI_API_KEY=…`.
 - 켰는데 키가 없으면 매매하지 않고 멈춰요(종료 코드 2).
 
+### 상위 모델 고르기
+
+`--ai-provider`(환경 변수 `AI_PROVIDER`)와 `--ai-model`(`AI_MODEL`)로 판단 모델을 바꿔요. 기본은 그대로 Gemini `gemini-2.5-flash-lite`예요.
+
+| 제공자 | 기본 모델 | 키 (환경 변수 / 맥 키체인 서비스 이름) | 100만 토큰당 입력·출력 |
+|---|---|---|---|
+| `gemini` | `gemini-2.5-flash-lite` | `GEMINI_API_KEY` / `devlog-trade-bot-gemini` | 0.10·0.40달러 |
+| `anthropic` | `claude-opus-5-5` (`claude-sonnet-5-5`, `claude-haiku-5-5`) | `ANTHROPIC_API_KEY` / `devlog-trade-bot-anthropic` | Opus 4·20, Sonnet 2·10, Haiku 0.10·0.50달러 |
+| `openai` | `gpt-5` (`gpt-5-mini`, `gpt-5-nano`) | `OPENAI_API_KEY` / `devlog-trade-bot-openai` | 1.25·10, mini 0.25·2, nano 0.05·0.40달러 |
+| `ollama` | `qwen2.5:7b` | 없음 (맥북에서 무료) | 0 |
+
+- **ChatGPT Plus·Claude 구독으로는 API를 쓸 수 없어요.** 각 회사 개발자 콘솔에서 종량제 API 키를 따로 만들어야 해요.
+- Claude는 생각을 짧게(`effort=low`), GPT-5는 `reasoning_effort=low`로 물어요. 생각 토큰도 출력으로 과금돼서 한 번에 1,500~3,000토큰 안팎이 들어요. 답이 늦을 수 있어 제한 시간은 90초예요.
+- 표에 없는 모델(예: 새로 나온 모델)은 가격을 넣어 주세요: `--ai-model gpt-5.5 --ai-price-in 5 --ai-price-out 30`. 넣지 않으면 그 회사의 비싼 값으로 어림해서 예산을 일찍 막아요.
+- 월 예산(기본 30,000원)을 넘으면 규칙 매매로 내려가니, 비싼 모델은 4시간봉처럼 호출이 적은 봉에 쓰는 게 좋아요. 코인 5개 기준 한 계좌 4시간봉은 하루 30번, 1시간봉은 120번이에요.
+
+### 모델끼리 모의매매로 비교하기
+
+같은 캔들을 모델마다 다른 상태 파일로 돌리면 같은 조건에서 비교돼요. 매매 일지의 전략 이름(`ma-cross+ai:openai:gpt-5` 등)으로 모델이 나뉘어요.
+
+```text
+# jobs.conf — 4시간봉 바이낸스 현물, 모델마다 모의 계좌 하나씩
+--exchange binance --market spot --interval 4h --state trade-state-cmp-rule.json --dry-run
+--exchange binance --market spot --interval 4h --state trade-state-cmp-gemini.json --ai on --dry-run
+--exchange binance --market spot --interval 4h --state trade-state-cmp-gpt5.json --ai on --ai-provider openai --dry-run
+--exchange binance --market spot --interval 4h --state trade-state-cmp-opus.json --ai on --ai-provider anthropic --dry-run
+```
+
+규칙만 쓰는 계좌를 기준으로 2주 돌린 뒤 실현 손익, 승률, 최대 낙폭, 수수료, AI 비용을 함께 봐요. 위 네 줄을 2주 돌리면 AI 비용은 2만 5천 원 안팎으로 어림돼요(대부분 Opus). 모든 계좌가 같은 `trade-ai-usage.json`을 써서 월 예산은 합쳐서 지켜지고, 첫날 이 파일로 실제 비용을 확인해요. 비교가 끝나면 고른 모델 줄만 남겨요.
+
 ## 1. 먼저 화면에만 돌려 보기 (종가 CSV)
 
 ```bash

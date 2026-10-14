@@ -9,6 +9,11 @@ export DEVLOG_TOKEN
 # AI 매매 판단(#263)을 켤 때만: Gemini 키도 키체인(서비스 이름 devlog-trade-bot-gemini)에서 읽는다
 GEMINI_API_KEY="$(security find-generic-password -a "$USER" -s devlog-trade-bot-gemini -w 2>/dev/null || true)"
 [ -n "$GEMINI_API_KEY" ] && export GEMINI_API_KEY
+# 상위 모델(AI_PROVIDER=anthropic·openai)을 고르면 그 키도 키체인에서 읽는다
+ANTHROPIC_API_KEY="$(security find-generic-password -a "$USER" -s devlog-trade-bot-anthropic -w 2>/dev/null || true)"
+[ -n "$ANTHROPIC_API_KEY" ] && export ANTHROPIC_API_KEY
+OPENAI_API_KEY="$(security find-generic-password -a "$USER" -s devlog-trade-bot-openai -w 2>/dev/null || true)"
+[ -n "$OPENAI_API_KEY" ] && export OPENAI_API_KEY
 export PYTHONUTF8=1
 echo "=== $(date '+%Y-%m-%d %H:%M:%S')"
 PY="$("$BOT_DIR/macos/find-python.sh")" || { echo "Python 3.10 이상을 찾지 못했어요. brew install python 또는 python.org 설치 뒤 다시 돌려요."; exit 1; }
