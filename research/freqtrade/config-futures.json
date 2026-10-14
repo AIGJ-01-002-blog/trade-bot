@@ -1,0 +1,41 @@
+{
+  "max_open_trades": 5,
+  "stake_currency": "USDT",
+  "dry_run": true,
+  "dry_run_wallet": 1000,
+  "timeframe": "1h",
+  "fee": 0.0005,
+  "exchange": {
+    "name": "binance",
+    "pair_whitelist": [
+      "BTC/USDT:USDT",
+      "ETH/USDT:USDT",
+      "XRP/USDT:USDT",
+      "SOL/USDT:USDT",
+      "DOGE/USDT:USDT"
+    ],
+    "ccxt_config": {},
+    "ccxt_async_config": {}
+  },
+  "pairlists": [
+    {
+      "method": "StaticPairList"
+    }
+  ],
+  "entry_pricing": {
+    "price_side": "same",
+    "use_order_book": false
+  },
+  "exit_pricing": {
+    "price_side": "same",
+    "use_order_book": false
+  },
+  "dataformat_ohlcv": "feather",
+  "user_data_dir": "user_data",
+  "internals": {
+    "process_throttle_secs": 5
+  },
+  "trading_mode": "futures",
+  "stake_amount": "unlimited",
+  "margin_mode": "isolated"
+}
