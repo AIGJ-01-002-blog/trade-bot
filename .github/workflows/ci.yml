@@ -78,4 +78,4 @@ jobs:
       - name: 이미지에서 작업 파일 한 번 돌리기 (화면에만)
         run: docker run --rm trade-bot python -m devlog_trade jobs /app/jobs.conf || echo "거래소 응답에 따라 실패할 수 있어요 (exit $?)"
       - name: 맥 스크립트 문법
-        run: bash -n macos/run-bot.sh macos/install.sh && python -c "import plistlib; plistlib.loads(open('macos/life.devlog.trade-bot.plist','rb').read().replace(b'__INTERVAL__', b'300'))"
+        run: bash -n macos/run-bot.sh macos/install.sh macos/find-python.sh && ./macos/find-python.sh && python -c "import plistlib; plistlib.loads(open('macos/life.devlog.trade-bot.plist','rb').read().replace(b'__INTERVAL__', b'300'))"

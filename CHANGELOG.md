@@ -9,6 +9,9 @@
 
 ## [Unreleased]
 
+### 고침
+- 맥 launchd가 기본 `/usr/bin/python3`(3.9)를 잡아 봇이 돌지 않던 문제: `macos/find-python.sh`가 Homebrew·python.org의 3.10 이상을 찾고, 없으면 `install.sh`가 설치 안내와 함께 멈춘다.
+
 - 공개 저장소 대비: CI에 gitleaks 비밀값 검사를 넣고, `.gitignore`에 키·인증서·로그 파일을 더했다. README에 키는 기기 비밀 저장소에만 두고 거래소 키는 출금 권한 없이 만든다고 적었다.
 
 ## [0.1.0] - 2026-10-14

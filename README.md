@@ -6,7 +6,7 @@
 - 이 저장소는 [devlog](https://github.com/AIGJ-01-002-blog/devlog)의 `app/trade-bot`을 커밋 기록째 옮겨 온 거예요. 커밋·CHANGELOG에 적힌 #번호는 devlog 저장소의 이슈·PR이에요.
 - 일하는 방식은 devlog와 같은 목표 단위 Git Flow예요: `develop`에서 딴 `feature/*`로 작업해 `develop`에 PR, 버전을 낼 때 `develop`을 `main`에 합치고 `v버전` 태그를 달아요.
 - 버전: 봇은 devlog와 따로 버전을 매겨요. 지금 0.1.0이고, 바뀐 점과 필요한 devlog 버전은 [CHANGELOG.md](CHANGELOG.md)에 있어요(`python3 -m devlog_trade --version`).
-- 필요한 것: Python 3.10 이상 (추가 패키지 없음). 맥·Windows·리눅스 모두 돌아요.
+- 필요한 것: Python 3.10 이상 (추가 패키지 없음). 맥·Windows·리눅스 모두 돌아요. 맥 기본 `python3`는 3.9라 `brew install python`이나 python.org 설치본이 필요해요(`macos/install.sh`가 알아서 찾아요).
 - 예제 전략(`--window`일 이동평균 돌파, `--stop-loss` 손절)은 수익을 내는 전략이 아니라 기록 흐름을 보여 주는 예제예요. `devlog_trade/strategy.py`를 자기 전략으로 바꿔 쓰세요.
 - 투자 권유가 아니에요. devlog에 만들어지는 글과 쇼츠에도 같은 고지가 들어가요.
 
