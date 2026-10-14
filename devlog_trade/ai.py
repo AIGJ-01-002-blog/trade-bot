@@ -395,8 +395,23 @@ def add_args(p: argparse.ArgumentParser) -> None:
                    help="AI 사용량 파일. 여러 봇이 같은 파일을 써야 상한이 합쳐져요")
 
 
+def control_path() -> Path:
+    """MCP(devlog_trade.mcp)의 AI 켜고 끄기가 쓰는 파일. 봇이 도는 폴더에 둔다"""
+    return Path(os.environ.get("TRADE_CONTROL", "trade-control.json"))
+
+
+def switch() -> str | None:
+    """켜고 끄기 파일의 값(on·off), 없으면 None"""
+    try:
+        value = json.loads(control_path().read_text(encoding="utf-8")).get("ai")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return value if value in ("on", "off") else None
+
+
 def enabled(args: argparse.Namespace) -> bool:
-    value = args.ai or os.environ.get("AI_DECISION", "off")
+    """켜고 끄기 파일 → --ai 플래그 → 환경 변수 AI_DECISION 순. 대화에서 끄면 jobs.conf에 --ai on이 있어도 꺼진다"""
+    value = switch() or args.ai or os.environ.get("AI_DECISION", "off")
     return value.strip().lower() in ("on", "1", "true", "yes")
 
 

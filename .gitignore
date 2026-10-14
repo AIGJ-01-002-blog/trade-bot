@@ -12,3 +12,5 @@ trade-ai-usage*.json*
 secret*.env
 *.log
 logs/
+trade-*.lock
+trade-control.json
