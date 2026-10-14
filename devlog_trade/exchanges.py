@@ -13,6 +13,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Callable
 
+from . import __version__
+
 # 봉 간격 → 길이. 바이낸스·업비트가 함께 주는 간격만 둔다
 INTERVALS: dict[str, timedelta] = {
     "1m": timedelta(minutes=1), "5m": timedelta(minutes=5), "15m": timedelta(minutes=15), "30m": timedelta(minutes=30),
@@ -38,7 +40,7 @@ Fetch = Callable[[str], object]
 
 
 def http_get_json(url: str, timeout: float = 15) -> object:
-    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "devlog-trade-bot"})
+    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": f"devlog-trade-bot/{__version__}"})
     try:
         res = urllib.request.urlopen(req, timeout=timeout)  # noqa: S310 (거래소 공개 시세 주소만 부른다)
     except urllib.error.HTTPError as e:

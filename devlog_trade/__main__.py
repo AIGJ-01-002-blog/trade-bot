@@ -18,7 +18,7 @@ from decimal import ROUND_FLOOR, Decimal
 from pathlib import Path
 from typing import Callable
 
-from . import ai
+from . import __version__, ai
 from .broker import Fill, PaperBroker
 from .exchanges import COINS, EXCHANGES, INTERVALS, Exchange, ExchangeError
 from .futures import FuturesBroker
@@ -254,6 +254,7 @@ def _common(r: argparse.ArgumentParser) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="devlog_trade", description="모의 체결 봇 예제: 체결마다 devlog 매매 일지에 기록을 남겨요.")
+    p.add_argument("--version", action="version", version=f"devlog_trade {__version__}")
     sub = p.add_subparsers(dest="command", required=True)
 
     r = sub.add_parser("run", help="종가 CSV로 전략을 돌려 모의 체결하고 devlog에 남겨요")

@@ -307,6 +307,15 @@ class CliTest(unittest.TestCase):
             code = cli.main(list(argv))
         return code, out.getvalue(), err.getvalue()
 
+    def test_version_is_its_own(self):
+        import devlog_trade
+        out = io.StringIO()
+        with redirect_stdout(out), self.assertRaises(SystemExit):
+            cli.main(["--version"])
+        self.assertEqual(out.getvalue().strip(), f"devlog_trade {devlog_trade.__version__}")
+        changelog = (Path(__file__).resolve().parent.parent / "CHANGELOG.md").read_text(encoding="utf-8")
+        self.assertIn(f"## [{devlog_trade.__version__}]", changelog)  # 버전을 올리면 CHANGELOG에도 적는다
+
     def test_live_orders_are_refused(self):
         code, _, err = self.run_cli("run", str(SAMPLE), "--live")
         self.assertEqual(code, 2)
