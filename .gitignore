@@ -4,3 +4,11 @@ __pycache__/
 .env
 data/
 trade-ai-usage*.json*
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+secret*.env
+*.log
+logs/
