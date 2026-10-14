@@ -26,7 +26,7 @@ from .journal import Journal, JournalError
 from .strategy import Bar, MovingAverageCross, read_bars
 
 KST = timezone(timedelta(hours=9))
-MAX_LEVERAGE = Decimal(3)  # 민서님 결정: 선물 모의매매는 3배까지
+MAX_LEVERAGE = Decimal(7)  # 민서님 결정(2026-10-14): 선물은 7배까지. 실계좌(live.py)와 같게 둔다
 COIN_STEP = Decimal("0.00000001")  # 코인 수량·USDT 금액은 소수 8자리까지
 LIVE_REFUSED = "실계좌 주문은 이 예제에 없어요. 되돌릴 수 없는 주문이라 직접 코드를 더하고 직접 켜야 해요."
 
@@ -278,7 +278,7 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--cash", help="처음 모의 현금. 기본 바이낸스 1000 USDT, 업비트 1,000,000원")
     c.add_argument("--budget", help="한 번 들어갈 때 쓸 금액(선물은 증거금). 기본 바이낸스 100 USDT, 업비트 100,000원")
     c.add_argument("--fee-rate", help="수수료율. 기본 바이낸스 현물 0.001, 선물 0.0005, 업비트 0.0005")
-    c.add_argument("--leverage", default="1", help="선물 레버리지 (1~3배, 기본 1배)")
+    c.add_argument("--leverage", default="1", help="선물 레버리지 (1~7배, 기본 1배)")
     _common(c)
     ai.add_args(c)
 

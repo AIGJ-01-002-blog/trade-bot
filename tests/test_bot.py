@@ -461,9 +461,11 @@ class CoinCliTest(unittest.TestCase):
         self.assertEqual(broker.last_seen["BTCUSDT"], bars[-1].date)
 
     def test_futures_rules(self):
-        code, _, err = self.run_coin(BinanceFutures(fetch=lambda url: []), "--market", "futures", "--leverage", "5", "--dry-run")
+        code, _, err = self.run_coin(BinanceFutures(fetch=lambda url: []), "--market", "futures", "--leverage", "8", "--dry-run")
         self.assertEqual(code, 2)
-        self.assertIn("1~3배", err)
+        self.assertIn("1~7배", err)
+        code, out, _ = self.run_coin(BinanceFutures(fetch=lambda url: []), "--market", "futures", "--leverage", "7", "--dry-run")
+        self.assertEqual(code, 0, out)  # 7배까지는 받는다
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
             code = cli.main(["coin", "--exchange", "upbit", "--market", "futures", "--dry-run"])
