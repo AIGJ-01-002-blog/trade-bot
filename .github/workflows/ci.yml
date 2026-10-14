@@ -1,0 +1,66 @@
+# 매매 봇 테스트. 맥·Windows·리눅스에서 같은 코드가 돌므로 세 운영체제에서 모두 돌린다.
+name: trade-bot-ci
+
+on:
+  pull_request:
+  push:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trade-bot-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 테스트
+        env:
+          PYTHONUTF8: "1"
+        run: python -m unittest discover -s tests -t . -v
+
+  # 실제 거래소 공개 시세로 한 번 돌려 본다(키 없음, 화면에만). 거래소·네트워크 사정으로 실패할 수 있어 PR을 막지 않는다
+  public-candles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 바이낸스 현물 코인 5종 1시간봉
+        run: python -m devlog_trade coin --exchange binance --dry-run --state "$RUNNER_TEMP/binance.json"
+      - name: 업비트 KRW 코인 5종 1시간봉
+        if: always()
+        run: python -m devlog_trade coin --exchange upbit --dry-run --state "$RUNNER_TEMP/upbit.json"
+      # 선물 시세(fapi)는 미국에서 451로 막혀 GitHub 러너에서는 실패할 수 있다. 한국에서는 열린다
+      - name: 바이낸스 USDT-M 선물 3배 15분봉 (미국 러너에서는 막힐 수 있음)
+        if: always()
+        continue-on-error: true
+        run: python -m devlog_trade coin --exchange binance --market futures --leverage 3 --interval 15m --dry-run --state "$RUNNER_TEMP/futures.json"
+
+  # 집 PC용 Docker 이미지와 맥 launchd 파일이 깨지지 않았는지 본다
+  packaging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Docker 이미지 만들기
+        run: docker build -t trade-bot .
+      - name: 이미지에서 작업 파일 한 번 돌리기 (화면에만)
+        run: docker run --rm trade-bot python -m devlog_trade jobs /app/jobs.conf || echo "거래소 응답에 따라 실패할 수 있어요 (exit $?)"
+      - name: 맥 스크립트 문법
+        run: bash -n macos/run-bot.sh macos/install.sh && python -c "import plistlib; plistlib.loads(open('macos/life.devlog.trade-bot.plist','rb').read().replace(b'__INTERVAL__', b'300'))"

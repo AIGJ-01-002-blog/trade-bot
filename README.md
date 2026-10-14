@@ -1,8 +1,10 @@
-# devlog 매매 봇 예제 (모의투자)
+# devlog 매매 봇 (모의투자)
 
-거래소 공개 시세(바이낸스·업비트 캔들)나 종가 CSV로 예제 전략을 돌려 **모의 체결**하고, 체결마다 devlog **매매 일지**(`/trades`, 이슈 #243·#255)에 기록을 남기는 작은 프로그램이에요.
+거래소 공개 시세(바이낸스·업비트 캔들)나 종가 CSV로 예제 전략을 돌려 **모의 체결**하고, 체결마다 devlog **매매 일지**(`/trades`)에 기록을 남기는 작은 프로그램이에요.
 실제 주문은 내지 않아요. 거래소 API 키도 쓰지 않아요(키 없이 열린 시세 주소만 불러요). 기록이 쌓이면 devlog 화면에서 날마다 메모를 남기고, 요약 임시글과 쇼츠 대본을 만들 수 있어요.
 
+- 이 저장소는 [devlog](https://github.com/AIGJ-01-002-blog/devlog)의 `app/trade-bot`을 커밋 기록째 옮겨 온 거예요. 커밋·CHANGELOG에 적힌 #번호는 devlog 저장소의 이슈·PR이에요.
+- 일하는 방식은 devlog와 같은 목표 단위 Git Flow예요: `develop`에서 딴 `feature/*`로 작업해 `develop`에 PR, 버전을 낼 때 `develop`을 `main`에 합치고 `v버전` 태그를 달아요.
 - 버전: 봇은 devlog와 따로 버전을 매겨요. 지금 0.1.0이고, 바뀐 점과 필요한 devlog 버전은 [CHANGELOG.md](CHANGELOG.md)에 있어요(`python3 -m devlog_trade --version`).
 - 필요한 것: Python 3.10 이상 (추가 패키지 없음). 맥·Windows·리눅스 모두 돌아요.
 - 예제 전략(`--window`일 이동평균 돌파, `--stop-loss` 손절)은 수익을 내는 전략이 아니라 기록 흐름을 보여 주는 예제예요. `devlog_trade/strategy.py`를 자기 전략으로 바꿔 쓰세요.
@@ -11,7 +13,7 @@
 ## 코인 모의매매 (바이낸스·업비트)
 
 ```bash
-cd app/trade-bot
+cd trade-bot
 python3 -m devlog_trade coin --exchange binance --dry-run                                   # 현물, 코인 5종, 1시간봉
 python3 -m devlog_trade coin --exchange upbit --interval 15m --dry-run                      # 업비트 원화 마켓 15분봉
 python3 -m devlog_trade coin --exchange binance --market futures --leverage 3 --dry-run     # USDT-M 선물, 3배
@@ -65,7 +67,7 @@ python3 -m devlog_trade coin --exchange binance --coins BTC,ETH --interval 4h --
 ### 집 PC로 옮길 때 (Docker)
 
 ```bash
-cd app/trade-bot
+cd trade-bot
 echo "DEVLOG_TOKEN=…" > .env       # git에 올라가지 않아요
 docker compose up -d --build       # 5분마다 jobs.conf를 돌려요. 상태 파일은 ./data에 남아요
 docker compose logs -f
@@ -96,7 +98,7 @@ python3 -m devlog_trade coin --exchange binance --market futures --interval 4h -
 ## 1. 먼저 화면에만 돌려 보기 (종가 CSV)
 
 ```bash
-cd app/trade-bot
+cd trade-bot
 python3 -m devlog_trade run sample-prices.csv --state demo-state.json --dry-run   # Windows는 python
 ```
 
@@ -126,7 +128,7 @@ python -m devlog_trade run prices.csv --fee-rate 0.00015 --sell-tax-rate 0.002
 - 상태 파일(`--state`, 기본 `trade-state.json`)에 모의 현금·보유 종목·처리한 마지막 날짜가 남아요. 같은 CSV로 다시 돌려도 그 날짜 뒤의 새 날짜에서만 체결해요.
 - devlog에 보내지 못한 체결은 `trade-state.pending.json`에 남았다가 다음 실행 때 다시 보내요. 체결 번호가 같아서 devlog에는 한 번만 남아요.
 - 기록은 하루 500건까지예요. 넘으면 devlog가 거절하니 봇을 멈추고 전략을 확인해 주세요.
-- 집에서 띄운 devlog(`app/compose.yaml`)에 남기려면 `--server http://localhost:8080`.
+- 집에서 띄운 devlog(devlog 저장소의 `app/compose.yaml`)에 남기려면 `--server http://localhost:8080`.
 
 ## 3. 매일 돌리기
 
@@ -134,7 +136,7 @@ python -m devlog_trade run prices.csv --fee-rate 0.00015 --sell-tax-rate 0.002
 
 ```bash
 # macOS / Linux: crontab -e
-0 16 * * 1-5 cd /path/to/app/trade-bot && DEVLOG_TOKEN='…' python3 -m devlog_trade run prices.csv >> trade.log 2>&1
+0 16 * * 1-5 cd /path/to/trade-bot && DEVLOG_TOKEN='…' python3 -m devlog_trade run prices.csv >> trade.log 2>&1
 ```
 
 Windows는 작업 스케줄러에서 같은 명령을 걸고, 토큰은 사용자 환경 변수에 넣어 주세요.
@@ -144,7 +146,7 @@ Windows는 작업 스케줄러에서 같은 명령을 걸고, 토큰은 사용�
 `/trades`에서 날을 골라 **오늘 메모**를 남겨요(무엇을 배웠는지, 다음에 바꿀 것). 메모가 있어야 쇼츠 대본을 만들 수 있어요. 숫자만 읽는 영상은 양산형으로 보이기 때문이에요.
 
 - **요약 임시글 만들기**: 체결 표·요약·메모·고지가 들어간 임시글. 읽고 고친 뒤 직접 발행해요.
-- **쇼츠 대본 만들기**: 쇼츠 스튜디오로 이어져요. 영상은 렌더 워커(`app/render-worker`)가 만들고, 올리기는 직접 해요.
+- **쇼츠 대본 만들기**: 쇼츠 스튜디오로 이어져요. 영상은 렌더 워커(devlog 저장소의 `app/render-worker`)가 만들고, 올리기는 직접 해요.
 
 ## 실계좌 주문
 

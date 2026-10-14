@@ -4,7 +4,7 @@
 
 - 1.0.0 전(0.x)에는 기능이 늘면 Minor, 고치기만 하면 Patch를 올려요.
 - **1.0.0은 실계좌 주문이 바이낸스 테스트넷 확인을 통과했을 때** 내요. 그때부터 실제 돈이 움직일 수 있어서예요.
-- 봇이 별도 저장소 `trade-bot`으로 옮겨 가면 그 저장소에 `v버전` 태그와 릴리스를 만들어요. 그 전에는 이 파일과 devlog의 draft PR로만 기록해요.
+- 버전마다 이 저장소에 `v버전` 태그를 달아요. #번호는 devlog 저장소의 이슈·PR이에요(봇이 2026-10-14에 devlog `app/trade-bot`에서 옮겨 왔어요).
 - devlog 릴리스(목표 단위 Git Flow)와는 묶지 않아요. 봇 버전마다 필요한 devlog 버전을 아래에 적어요.
 
 ## [Unreleased]
@@ -19,6 +19,7 @@
 - AI 매매 판단 켜고 끄기(`--ai on`/`AI_DECISION`): 15분봉 이상, 손절은 규칙이 먼저, 하루 호출·월 예산 상한 (#263, PR #269)
 - `jobs` 명령과 `jobs.conf`, 맥북 launchd 등록(`macos/install.sh`, 키체인 토큰, caffeinate), 집 PC용 Dockerfile·compose.yaml
 - `--version`
+- 별도 비공개 저장소로 옮김: devlog `app/trade-bot`의 커밋 기록과 CI(3개 OS 테스트·실제 시세 확인·Docker 빌드)를 그대로 가져왔어요 (#259)
 
 ### 그대로
 - 종가 CSV 모드 `run`(증권사 종목, 원화)
