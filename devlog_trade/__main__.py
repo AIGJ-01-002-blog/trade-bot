@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import __version__, ai, live
-from .broker import Fill, PaperBroker
+from .broker import Fill, PaperBroker, state_lock
 from .exchanges import COINS, EXCHANGES, INTERVALS, Exchange, ExchangeError
 from .futures import FuturesBroker
 from .journal import Journal, JournalError
@@ -185,7 +185,16 @@ def coin(args: argparse.Namespace) -> int:
     if args.state is None:
         args.state = live.live_state_name(args.exchange, ex.market, args.interval) if args.live else \
             f"trade-state-{args.exchange}-{ex.market}-{args.interval}.json"
+    try:
+        with state_lock(Path(args.state)):  # MCP 주문(devlog_trade.mcp)과 같은 상태 파일을 번갈아 쓴다
+            return _coin_session(args, ex, symbols, fee_rate, cash, leverage)
+    except TimeoutError as e:
+        print(e, file=sys.stderr)
+        return 1
 
+
+def _coin_session(args: argparse.Namespace, ex: Exchange, symbols: list[str], fee_rate: Decimal, cash: Decimal,
+                  leverage: Decimal) -> int:
     def new_broker() -> PaperBroker | FuturesBroker:
         if ex.market == "futures":
             return FuturesBroker(cash=cash, fee_rate=fee_rate, leverage=leverage, currency=ex.currency, exchange=ex.code)

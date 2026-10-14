@@ -133,6 +133,48 @@ python3 -m devlog_trade coin --exchange binance --market futures --interval 4h -
 
 규칙만 쓰는 계좌를 기준으로 2주 돌린 뒤 실현 손익, 승률, 최대 낙폭, 수수료, AI 비용을 함께 봐요. 위 네 줄을 2주 돌리면 AI 비용은 2만 5천 원 안팎으로 어림돼요(대부분 Opus). 모든 계좌가 같은 `trade-ai-usage.json`을 써서 월 예산은 합쳐서 지켜지고, 첫날 이 파일로 실제 비용을 확인해요. 비교가 끝나면 고른 모델 줄만 남겨요.
 
+## 대화로 봇 다루기 (MCP)
+
+Claude Desktop·Claude Code·Codex CLI에 봇을 MCP 서버로 붙이면 대화로 시세와 계좌를 보고 주문할 수 있어요. 구독(Claude Pro, ChatGPT Plus) 범위 안에서 돌아요. 다만 대화는 사람이 말을 걸 때만 움직여서, 봉마다 혼자 판단하는 자동 매매는 그대로 `jobs.conf`와 위의 AI 판단이 맡아요.
+
+| 도구 | 하는 일 |
+|---|---|
+| `trade_bot_prices` | 최근 종가, 5·20봉 이동평균, 등락률, 고가·저가 |
+| `trade_bot_accounts` | 계좌마다 현금, 보유 종목·포지션, 지금 가격 기준 평가 손익, AI 켜짐 여부와 이번 달 AI 비용 |
+| `trade_bot_order` | 시장가 주문. 현물 BUY·SELL, 선물 LONG·SHORT·CLOSE. **기본은 모의 계좌만** |
+| `trade_bot_ai` | AI 판단 켜기·끄기(`trade-control.json`). `jobs.conf`의 `--ai`보다 먼저 적용돼요 |
+
+- 도구 이름은 `trade_bot_`으로 시작해요. 매매 일지 조회·기록은 devlog MCP(`record_trade` 등)가 맡고, 이 서버는 봇 계좌만 다뤄요. 대화로 낸 체결은 봇과 같은 길로 기록되고 전략 이름이 `mcp-manual`, 이유가 `[대화 주문] …`이에요.
+- 서버는 기본으로 체결을 devlog에 보내지 않아요. 보내려면 `--record`를 주고 서버 환경 변수에 `DEVLOG_TOKEN`을 넣어요(설정 파일에 토큰을 적지 말고 키체인에서 읽어 넘겨요).
+- 실계좌 주문은 서버를 `--live --max-order … --max-order-loss … --max-daily-loss …`로 띄우고(실거래소는 `DEVLOG_TRADE_LIVE=1`과 `--record`도) 도구에서 `live: true`를 줄 때만 나가요. 봇과 같은 주문당·하루 손실 상한을 거쳐요. 대화하는 AI는 서버 설정을 바꿀 수 없어요.
+- 봇 작업과 대화 주문이 같은 상태 파일을 동시에 고치지 않게 잠가요(맥·리눅스).
+
+맥에서 붙이기 (`PY`는 `macos/find-python.sh`가 찾은 3.10 이상 Python):
+
+```bash
+cd ~/trade-bot && PY="$(./macos/find-python.sh)"
+# Claude Code
+claude mcp add trade-bot -e PYTHONPATH="$PWD" -- "$PY" -m devlog_trade.mcp --dir "$PWD"
+```
+
+Claude Desktop은 `~/Library/Application Support/Claude/claude_desktop_config.json`에:
+
+```json
+{"mcpServers": {"trade-bot": {"command": "/opt/homebrew/bin/python3",
+  "args": ["-m", "devlog_trade.mcp", "--dir", "/Users/<나>/trade-bot"],
+  "env": {"PYTHONPATH": "/Users/<나>/trade-bot"}}}}
+```
+
+```toml
+# Codex CLI: ~/.codex/config.toml
+[mcp_servers.trade-bot]
+command = "/opt/homebrew/bin/python3"
+args = ["-m", "devlog_trade.mcp", "--dir", "/Users/<나>/trade-bot"]
+env = { PYTHONPATH = "/Users/<나>/trade-bot" }
+```
+
+ChatGPT 앱은 인터넷에 열린 원격 MCP 서버만 붙일 수 있어서, 봇을 밖에 열지 않는 지금 구조에서는 쓰지 않아요.
+
 ## 1. 먼저 화면에만 돌려 보기 (종가 CSV)
 
 ```bash
