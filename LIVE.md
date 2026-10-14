@@ -50,10 +50,24 @@ UPBIT_ACCESS_KEY='…' UPBIT_SECRET_KEY='…' python3 -m devlog_trade.live check
 - devlog 기록: 거래소는 `BINANCE`·`UPBIT`, 선물은 이유 앞에 `[선물 숏 진입 3x]`·`[선물 숏 정리]`처럼 모의와 같은 꼬리표를 붙여요. 체결 시각은 봉이 닫힌 시각이 아니라 거래소가 알려 준 실제 체결 시각이에요. 실계좌 체결은 `mode=LIVE`로 보내요.
 - 실계좌 상태 파일 기본 이름은 `trade-live-<거래소>-<시장>-<봉>.json`이에요(`live.live_state_name`). 처음 보는 종목은 받은 봉으로 전략만 데우고 다음 봉부터 주문해요.
 
-## 봇에 붙이는 법
+## 봇으로 돌리기
 
-`coin` 모드에 붙이는 입구는 `live.open_live(args, exchange, market, state)`와 `live.add_live_args(parser)`예요(봇 통합 브랜치에서 연결해요). `--live`와 `--leverage`는 `coin` 명령에 이미 있어요.
-실계좌 상태 파일은 모의 계좌 파일과 따로 써요. 모의 계좌 파일을 주면 장부가 섞이지 않게 멈춰요.
+`coin` 명령에 `--live`를 주면 같은 전략으로 실계좌 주문을 내요. 먼저 테스트넷으로 확인하세요.
+
+```bash
+# 테스트넷 (바이낸스만). 키는 환경 변수로만
+python3 -m devlog_trade coin --exchange binance --coins BTC --interval 1h \
+  --live --testnet --max-order 20 --max-order-loss 5 --max-daily-loss 10
+
+# 실거래소: 설정과 확인 플래그가 둘 다 있어야 해요
+DEVLOG_TRADE_LIVE=1 python3 -m devlog_trade coin --exchange binance --market futures --leverage 2 --coins BTC \
+  --live --max-order 20 --max-order-loss 5 --max-daily-loss 10
+```
+
+- 상태 파일 기본 이름은 `trade-live-<거래소>-<시장>-<봉>.json`이라 모의 계좌(`trade-state-…`)와 섞이지 않아요.
+- 처음 도는 종목은 받은 봉으로 전략만 데우고, 그다음 닫히는 봉부터 주문해요. 지난 봉으로 주문하지 않아요.
+- devlog 매매 일지에는 `mode=LIVE`로 남아 화면에 "실계좌"로 따로 보여요. `--live`와 `--dry-run`은 함께 쓸 수 없어요.
+- 켜는 조건·상한·키·출금 권한 중 하나라도 맞지 않으면 주문 없이 멈춰요(종료 코드 2).
 
 ## 테스트
 

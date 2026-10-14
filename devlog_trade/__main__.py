@@ -18,7 +18,7 @@ from decimal import ROUND_FLOOR, Decimal
 from pathlib import Path
 from typing import Callable
 
-from . import __version__, ai
+from . import __version__, ai, live
 from .broker import Fill, PaperBroker
 from .exchanges import COINS, EXCHANGES, INTERVALS, Exchange, ExchangeError
 from .futures import FuturesBroker
@@ -28,7 +28,7 @@ from .strategy import Bar, MovingAverageCross, read_bars
 KST = timezone(timedelta(hours=9))
 MAX_LEVERAGE = Decimal(7)  # 민서님 결정(2026-10-14): 선물은 7배까지. 실계좌(live.py)와 같게 둔다
 COIN_STEP = Decimal("0.00000001")  # 코인 수량·USDT 금액은 소수 8자리까지
-LIVE_REFUSED = "실계좌 주문은 이 예제에 없어요. 되돌릴 수 없는 주문이라 직접 코드를 더하고 직접 켜야 해요."
+LIVE_REFUSED = "실계좌 주문은 coin 명령에서만 돼요(바이낸스 현물·선물, 업비트 현물). 종가 CSV 모드는 모의 체결만 해요."
 
 
 def _fill_from(d: dict) -> Fill:
@@ -48,10 +48,13 @@ def _amount(v: Decimal, currency: str) -> str:
 class Session:
     """상태 파일·보내지 못한 체결·devlog 보내기를 한곳에서 다룬다. CSV·현물·선물 모드가 함께 쓴다"""
 
-    def __init__(self, args: argparse.Namespace, new_broker: Callable[[], PaperBroker | FuturesBroker]):
+    def __init__(self, args: argparse.Namespace, new_broker: Callable[[], PaperBroker | FuturesBroker] | None,
+                 broker: PaperBroker | FuturesBroker | None = None):
         self.args = args
         self.state = Path(args.state)
-        if self.state.exists():
+        if broker is not None:  # 실계좌 브로커는 live.open_live가 상태 파일까지 열어서 준다
+            self.broker = broker
+        elif self.state.exists():
             market = json.loads(self.state.read_text(encoding="utf-8")).get("market", "spot")
             self.broker = FuturesBroker.load(self.state) if market == "futures" else PaperBroker.load(self.state)
         else:
@@ -71,7 +74,7 @@ class Session:
                       f"{_amount(fill.price, fill.currency)}{pnl} · {fill.reason}")
             else:
                 try:
-                    print(self.journal.record(fill, "PAPER", self.args.strategy))
+                    print(self.journal.record(fill, getattr(self.broker, "mode", "PAPER"), self.args.strategy))
                 except (JournalError, OSError) as e:
                     print(f"devlog에 남기지 못했어요 (다음 실행 때 다시 보내요): {e}", file=sys.stderr)
                     return False
@@ -163,9 +166,6 @@ def run(args: argparse.Namespace) -> int:
 
 def coin(args: argparse.Namespace) -> int:
     """거래소 공개 캔들 모드 (#255). 다 만들어진 봉의 종가로만 판단하고, 그 봉이 닫힌 시각을 체결 시각으로 남긴다"""
-    if args.live:
-        print(LIVE_REFUSED, file=sys.stderr)
-        return 2
     adapter = EXCHANGES.get((args.exchange, args.market))
     if adapter is None:
         print(f"{args.exchange}에는 {args.market} 시세가 없어요. 선물은 바이낸스만 돼요.", file=sys.stderr)
@@ -179,15 +179,26 @@ def coin(args: argparse.Namespace) -> int:
     if ex.market == "futures" and not Decimal(1) <= leverage <= MAX_LEVERAGE:
         print(f"레버리지는 1~{MAX_LEVERAGE}배로 주세요.", file=sys.stderr)
         return 2
+    if args.live and args.dry_run:
+        print("--live와 --dry-run은 함께 쓸 수 없어요. 실계좌 체결은 devlog에 남겨야 해요.", file=sys.stderr)
+        return 2
     if args.state is None:
-        args.state = f"trade-state-{args.exchange}-{ex.market}-{args.interval}.json"
+        args.state = live.live_state_name(args.exchange, ex.market, args.interval) if args.live else \
+            f"trade-state-{args.exchange}-{ex.market}-{args.interval}.json"
 
     def new_broker() -> PaperBroker | FuturesBroker:
         if ex.market == "futures":
             return FuturesBroker(cash=cash, fee_rate=fee_rate, leverage=leverage, currency=ex.currency, exchange=ex.code)
         return PaperBroker(cash=cash, fee_rate=fee_rate, currency=ex.currency, exchange=ex.code)
 
-    s = Session(args, new_broker)
+    if args.live:  # 되돌릴 수 없는 주문. 켜는 조건·상한·키·출금 권한을 live.open_live가 모두 확인한다
+        try:
+            s = Session(args, None, live.open_live(args, args.exchange, ex.market, Path(args.state)))
+        except (live.LiveOrderError, OSError, ValueError) as e:
+            print(e, file=sys.stderr)
+            return 2
+    else:
+        s = Session(args, new_broker)
     b = s.broker
     if b.exchange != ex.code or b.currency != ex.currency or b.market != ex.market:
         print(f"상태 파일 {s.state}은 {b.exchange or '종가 CSV'} {b.market}({b.currency}) 계좌예요. --state로 다른 파일을 주세요.",
@@ -249,7 +260,6 @@ def _common(r: argparse.ArgumentParser) -> None:
     r.add_argument("--stop-loss", default="0.03", help="손절 비율 (0.03 = -3%%)")
     r.add_argument("--strategy", default="ma-cross", help="매매 일지에 남길 전략 이름")
     r.add_argument("--dry-run", action="store_true", help="devlog에 보내지 않고 화면에만 보여요")
-    r.add_argument("--live", action="store_true", help=argparse.SUPPRESS)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -266,6 +276,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--sell-tax-rate", default="0", help="매도할 때 내는 세율. 그해 세율을 확인해 넣어요")
     r.add_argument("--time", default="15:20", help="체결 시각으로 남길 한국 시간 (종가 기준이라 장 마감 무렵)")
     _common(r)
+    r.add_argument("--live", action="store_true", help=argparse.SUPPRESS)  # 종가 CSV 모드는 실계좌가 없어 멈춘다
 
     c = sub.add_parser("coin", help="거래소 공개 캔들로 코인 모의매매하고 devlog에 남겨요 (API 키 없음)")
     c.add_argument("--exchange", choices=sorted({e for e, _ in EXCHANGES}), default="binance", help="시세를 받을 거래소")
@@ -280,6 +291,9 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--fee-rate", help="수수료율. 기본 바이낸스 현물 0.001, 선물 0.0005, 업비트 0.0005")
     c.add_argument("--leverage", default="1", help="선물 레버리지 (1~7배, 기본 1배)")
     _common(c)
+    c.add_argument("--live", action="store_true",
+                   help=f"실계좌 주문 (기본 꺼짐). 실거래소는 {live.LIVE_ENV}=1도 있어야 하고, --max-order·--max-order-loss·--max-daily-loss가 필요해요")
+    live.add_live_args(c)
     ai.add_args(c)
 
     j = sub.add_parser("jobs", help="작업 파일(줄마다 coin 옵션)을 차례로 돌려요. 맥 launchd·Docker가 써요")

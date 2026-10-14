@@ -319,7 +319,7 @@ class CliTest(unittest.TestCase):
     def test_live_orders_are_refused(self):
         code, _, err = self.run_cli("run", str(SAMPLE), "--live")
         self.assertEqual(code, 2)
-        self.assertIn("실계좌 주문은 이 예제에 없어요", err)
+        self.assertIn("coin 명령에서만", err)
 
     def test_sends_new_days_once_and_retries_failed_sends(self):
         with tempfile.TemporaryDirectory() as d:
@@ -373,10 +373,47 @@ class CoinCliTest(unittest.TestCase):
         ex.fetch_candles = lambda symbol, interval, limit, now=now: real(symbol, interval, limit, now=now)
         return ex
 
-    def test_live_orders_are_refused(self):
-        code, _, err = self.run_coin(Binance(fetch=lambda url: []), "--live")
-        self.assertEqual(code, 2)
-        self.assertIn("실계좌 주문은 이 예제에 없어요", err)
+    def test_live_needs_setting_and_refuses_dry_run(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict("os.environ", {}, clear=True):
+            state = str(Path(d) / "live.json")
+            code, _, err = self.run_coin(Binance(fetch=lambda url: []), "--live", "--state", state)
+            self.assertEqual(code, 2)
+            self.assertIn("DEVLOG_TRADE_LIVE=1", err)
+            code, _, err = self.run_coin(Binance(fetch=lambda url: []), "--live", "--dry-run", "--state", state)
+            self.assertEqual(code, 2)
+            self.assertIn("--dry-run", err)
+            self.assertFalse(Path(state).exists())
+
+    def test_live_on_testnet_warms_up_then_orders_and_records_live(self):
+        """가짜 테스트넷: 첫 실행은 지난 봉으로 주문하지 않고, 새로 닫힌 봉에서만 주문하고 mode=LIVE로 남긴다"""
+        from devlog_trade import live
+        from tests.test_live import FakeExchange, binance_spot
+        fx = FakeExchange()
+        binance_spot(fx)
+        real_open = live.open_live
+        env = {"BINANCE_TESTNET_API_KEY": "k", "BINANCE_TESTNET_API_SECRET": "s", "DEVLOG_TOKEN": "secret"}
+        limits = ("--max-order", "100", "--max-order-loss", "20", "--max-daily-loss", "50")
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict("os.environ", env, clear=True), \
+                mock.patch.object(live, "open_live", lambda *a: real_open(*a, send=fx)):
+            state = str(Path(d) / "live.json")
+            fake = FakeDevlog()
+            try:
+                common = ("--live", "--testnet", "--state", state, "--server", fake.url, "--window", "3", *limits)
+                code, out, err = self.run_coin(self.binance(CLOSES, len(CLOSES) - 0.5), *common)
+                self.assertEqual(code, 0, err)
+                self.assertFalse([c for c in fx.calls if c[0] == "POST"])  # 데우기만
+                self.assertEqual(fake.calls, [])
+                code, out, err = self.run_coin(self.binance(CLOSES, len(CLOSES) + 0.5), *common)  # 300이 닫혀 위로 꺾임
+                self.assertEqual(code, 0, err)
+            finally:
+                fake.close()
+            saved = json.loads(Path(state).read_text(encoding="utf-8"))
+        orders = [c for c in fx.calls if c[0] == "POST"]
+        self.assertEqual(len(orders), 1)
+        self.assertTrue(all(c[1] == "testnet.binance.vision" for c in fx.calls))
+        sent = [c["params"]["arguments"] for c in fake.calls]
+        self.assertEqual([(a["side"], a["mode"]) for a in sent], [("BUY", "LIVE")])
+        self.assertEqual(saved["mode"], "LIVE")
 
     def test_trades_closed_candles_once_and_sends_coin_fields(self):
         with tempfile.TemporaryDirectory() as d:
