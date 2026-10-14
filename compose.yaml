@@ -1,0 +1,11 @@
+# docker compose up -d --build
+# 토큰은 같은 폴더의 .env 파일(DEVLOG_TOKEN=...)에 넣어요. .env는 git에 올라가지 않아요.
+services:
+  trade-bot:
+    build: .
+    restart: unless-stopped
+    environment:
+      DEVLOG_TOKEN: ${DEVLOG_TOKEN:-}
+    volumes:
+      - ./data:/data
+      - ./jobs.conf:/app/jobs.conf:ro

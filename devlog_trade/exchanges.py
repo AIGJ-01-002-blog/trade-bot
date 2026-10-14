@@ -19,6 +19,7 @@ INTERVALS: dict[str, timedelta] = {
 }
 
 COIN_NAMES = {"BTC": "비트코인", "ETH": "이더리움", "XRP": "리플", "SOL": "솔라나", "DOGE": "도지코인"}
+COINS = list(COIN_NAMES)  # 기본으로 거래하는 코인
 
 
 class ExchangeError(RuntimeError):
@@ -48,7 +49,7 @@ class Exchange:
     code = ""  # record_trade의 exchange
     currency = ""  # 가격·수수료·손익의 통화
     fee_rate = Decimal(0)  # 일반 회원 기본 수수료율. 쓰는 등급에 맞게 --fee-rate로 바꾼다
-    default_symbol = ""
+    market = "spot"  # spot | futures
     default_cash = Decimal(0)
     default_budget = Decimal(0)
 
@@ -58,9 +59,14 @@ class Exchange:
     def base_asset(self, symbol: str) -> str:
         raise NotImplementedError
 
+    def symbol_for(self, coin: str) -> str:
+        """코인 이름(BTC)을 이 거래소의 마켓 코드로"""
+        raise NotImplementedError
+
     def coin_name(self, symbol: str) -> str:
         base = self.base_asset(symbol)
-        return COIN_NAMES.get(base, base)
+        name = COIN_NAMES.get(base, base)
+        return name + " 선물" if self.market == "futures" else name
 
     def fetch_candles(self, symbol: str, interval: str, limit: int, now: datetime | None = None) -> list[Candle]:
         """다 만들어진 봉만 오래된 순으로 돌려준다. 아직 진행 중인 마지막 봉은 뺀다"""
@@ -80,19 +86,22 @@ class Binance(Exchange):
     code = "BINANCE"
     currency = "USDT"
     fee_rate = Decimal("0.001")
-    default_symbol = "BTCUSDT"
     default_cash = Decimal(1000)
     default_budget = Decimal(100)
     base_url = "https://data-api.binance.vision"
+    path = "/api/v3/klines"
 
     def base_asset(self, symbol: str) -> str:
         return symbol[: -len(self.currency)] if symbol.endswith(self.currency) else symbol
+
+    def symbol_for(self, coin: str) -> str:
+        return coin.upper() + self.currency
 
     def _candles(self, symbol: str, interval: str, limit: int) -> list[Candle]:
         if not symbol.endswith(self.currency):
             raise ExchangeError(f"바이낸스는 {self.currency} 마켓만 받아요. 예: BTCUSDT")
         query = urllib.parse.urlencode({"symbol": symbol, "interval": interval, "limit": min(limit, 1000)})
-        rows = self.fetch(f"{self.base_url}/api/v3/klines?{query}")
+        rows = self.fetch(f"{self.base_url}{self.path}?{query}")
         if not isinstance(rows, list):
             raise ExchangeError(f"바이낸스 시세를 받지 못했어요: {rows}")
         step = INTERVALS[interval]
@@ -107,7 +116,6 @@ class Upbit(Exchange):
     code = "UPBIT"
     currency = "KRW"
     fee_rate = Decimal("0.0005")
-    default_symbol = "KRW-BTC"
     default_cash = Decimal(1_000_000)
     default_budget = Decimal(100_000)
     base_url = "https://api.upbit.com"
@@ -116,6 +124,9 @@ class Upbit(Exchange):
 
     def base_asset(self, symbol: str) -> str:
         return symbol.split("-", 1)[1] if "-" in symbol else symbol
+
+    def symbol_for(self, coin: str) -> str:
+        return f"{self.currency}-{coin.upper()}"
 
     def _candles(self, symbol: str, interval: str, limit: int) -> list[Candle]:
         if not symbol.startswith(self.currency + "-"):
@@ -132,4 +143,16 @@ class Upbit(Exchange):
         return out
 
 
-EXCHANGES: dict[str, type[Exchange]] = {"binance": Binance, "upbit": Upbit}
+class BinanceFutures(Binance):
+    """USDT-M 무기한 선물 시세. 선물 공개 시세는 fapi 주소에만 있다(지역에 따라 막힐 수 있다).
+    매매 일지의 거래소는 현물과 같은 BINANCE로 남기고, 이름·이유에 "선물"을 붙여 구분한다"""
+
+    market = "futures"
+    fee_rate = Decimal("0.0005")  # 일반 회원 테이커
+    base_url = "https://fapi.binance.com"
+    path = "/fapi/v1/klines"
+
+
+# (거래소, 시장) → 어댑터. 업비트는 선물이 없다. 바이비트는 여기에 더한다
+EXCHANGES: dict[tuple[str, str], type[Exchange]] = {
+    ("binance", "spot"): Binance, ("binance", "futures"): BinanceFutures, ("upbit", "spot"): Upbit}

@@ -45,6 +45,8 @@ class PaperBroker:
     last_date: str = ""  # 이미 처리한 마지막 날짜(CSV)나 봉 시작 시각(코인). 여기까지는 다시 체결하지 않는다
     currency: str = "KRW"
     exchange: str = ""
+    last_seen: dict[str, str] = field(default_factory=dict)  # 코인: 종목마다 처리한 마지막 봉 시작 시각
+    market: str = "spot"
 
     def _money(self, v: Decimal) -> Decimal:
         unit = Decimal(1) if self.currency == "KRW" else Decimal("0.00000001")
@@ -79,6 +81,12 @@ class PaperBroker:
         pos = self.positions.get(symbol)
         return pos.quantity if pos else Decimal(0)
 
+    def describe(self) -> str:
+        unit = "" if self.exchange else "주"
+        held = ", ".join(f"{s} {p.quantity:f}{unit}" for s, p in self.positions.items())
+        cash = f"{self.cash:,.0f}원" if self.currency == "KRW" else f"{self.cash.quantize(Decimal('0.00000001')).normalize():f} {self.currency}"
+        return f"현금 {cash} · 보유 {held or '없음'}"
+
     # 상태 파일: 다음 실행이 처리한 마지막 날짜까지 건너뛰고 보유 종목을 이어 간다
     def save(self, path: Path) -> None:
         data = {
@@ -89,6 +97,8 @@ class PaperBroker:
             "last_date": self.last_date,
             "currency": self.currency,
             "exchange": self.exchange,
+            "last_seen": self.last_seen,
+            "market": self.market,
         }
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -105,4 +115,5 @@ class PaperBroker:
             last_date=data.get("last_date", ""),
             currency=data.get("currency", "KRW"),
             exchange=data.get("exchange", ""),
+            last_seen=data.get("last_seen", {}),
         )

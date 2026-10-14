@@ -15,7 +15,8 @@ from devlog_trade import __main__ as cli
 from datetime import datetime, timedelta, timezone
 
 from devlog_trade.broker import PaperBroker
-from devlog_trade.exchanges import Binance, ExchangeError, Upbit
+from devlog_trade.exchanges import COINS, Binance, BinanceFutures, ExchangeError, Upbit
+from devlog_trade.futures import FuturesBroker
 from devlog_trade.journal import Journal, JournalError, payload
 from devlog_trade.strategy import Bar, MovingAverageCross
 
@@ -115,6 +116,44 @@ class ExchangeTest(unittest.TestCase):
             Upbit(fetch=lambda url: []).fetch_candles("KRW-BTC", "2h", 10)
 
 
+class FuturesBrokerTest(unittest.TestCase):
+    def test_long_and_short_pnl_with_fees(self):
+        b = FuturesBroker(cash=Decimal(1000), fee_rate=Decimal("0.0005"), leverage=Decimal(3))
+        long = b.open("BTCUSDT", "비트코인 선물", "LONG", Decimal("0.01"), Decimal(60000), "신호", "t")
+        self.assertEqual((long.side, long.fee), ("BUY", Decimal("0.3")))  # 명목 600 × 0.05%
+        self.assertEqual(b.positions["BTCUSDT"].margin, Decimal(200))
+        self.assertEqual(b.available(), Decimal("799.7"))
+        close = b.close("BTCUSDT", Decimal(61000), "신호", "t")
+        self.assertEqual((close.side, close.realized_pnl), ("SELL", Decimal("9.695")))  # 10 - 0.305
+        short = b.open("ETHUSDT", "이더리움 선물", "SHORT", Decimal(1), Decimal(3000), "신호", "t")
+        self.assertEqual(short.side, "SELL")
+        self.assertIn("[선물 숏 진입 3x]", short.reason)
+        cover = b.close("ETHUSDT", Decimal(2900), "신호", "t")
+        self.assertEqual((cover.side, cover.realized_pnl), ("BUY", Decimal("98.55")))  # 100 - 1.45
+
+    def test_margin_limits_and_liquidation(self):
+        b = FuturesBroker(cash=Decimal(100), leverage=Decimal(3), fee_rate=Decimal(0))
+        self.assertIsNone(b.open("A", "가", "LONG", Decimal(1), Decimal(400), "", "t"))  # 증거금 133 > 100
+        self.assertEqual(b.quantity_for(Decimal(50), Decimal(100)), Decimal("1.5"))
+        b.open("A", "가", "LONG", Decimal(3), Decimal(100), "", "t")  # 증거금 100
+        self.assertFalse(b.liquidation_due("A", Decimal(70)))
+        self.assertTrue(b.liquidation_due("A", Decimal("66.6")))
+        fill = b.close("A", Decimal(50), "", "t", liquidated=True)
+        self.assertEqual(fill.realized_pnl, Decimal(-100))  # 증거금까지만 잃는다
+        self.assertIn("강제 청산", fill.reason)
+
+    def test_state_survives_save_and_load(self):
+        b = FuturesBroker(cash=Decimal(1000), leverage=Decimal(2))
+        b.open("BTCUSDT", "비트코인 선물", "SHORT", Decimal("0.01"), Decimal(60000), "", "t")
+        b.last_seen["BTCUSDT"] = "2026-10-14T00:00:00Z"
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "f.json"
+            b.save(path)
+            again = FuturesBroker.load(path)
+        self.assertEqual(again.positions["BTCUSDT"].side, "SHORT")
+        self.assertEqual((again.leverage, again.cash, again.last_seen), (Decimal(2), b.cash, b.last_seen))
+
+
 class StrategyTest(unittest.TestCase):
     def feed(self, s, closes, holding=False, avg=Decimal(0)):
         out = None
@@ -131,6 +170,24 @@ class StrategyTest(unittest.TestCase):
                            holding=True, avg=Decimal(108))
         self.assertEqual(signal.side, "SELL")
         self.assertIn("손절선 -3%", signal.reason)
+
+    def test_futures_flips_between_long_and_short(self):
+        s = MovingAverageCross(window=3)
+        sig = None
+        for i, c in enumerate([100, 99, 98, 97, 105]):
+            sig = s.on_bar_futures(Bar(f"d{i}", "A", "가", Decimal(c)), None, Decimal(0))
+        self.assertEqual([x.side for x in sig], ["LONG"])
+        for i, c in enumerate([106, 107, 90]):
+            sig = s.on_bar_futures(Bar(f"e{i}", "A", "가", Decimal(c)), "LONG", Decimal(80))
+        self.assertEqual([x.side for x in sig], ["CLOSE", "SHORT"])
+
+    def test_futures_short_stop_loss(self):
+        s = MovingAverageCross(window=3, stop_loss=Decimal("0.03"))
+        sig = None
+        for i, c in enumerate([100, 101, 102, 103, 104]):
+            sig = s.on_bar_futures(Bar(f"d{i}", "A", "가", Decimal(c)), "SHORT", Decimal(100))
+        self.assertEqual([x.side for x in sig], ["CLOSE"])
+        self.assertIn("손절선", sig[0].reason)
 
     def test_waits_until_enough_history(self):
         self.assertIsNone(self.feed(MovingAverageCross(window=5), [1, 2, 3, 4, 5]))
@@ -286,8 +343,9 @@ class CliTest(unittest.TestCase):
 class CoinCliTest(unittest.TestCase):
     def run_coin(self, ex, *argv):
         out, err = io.StringIO(), io.StringIO()
-        with redirect_stdout(out), redirect_stderr(err), mock.patch.dict(cli.EXCHANGES, {"binance": lambda: ex, "upbit": lambda: ex}):
-            code = cli.main(["coin", *argv])
+        with redirect_stdout(out), redirect_stderr(err), mock.patch.dict(cli.EXCHANGES, {("binance", "spot"): lambda: ex, ("upbit", "spot"): lambda: ex,
+                                                                                         ("binance", "futures"): lambda: ex}):
+            code = cli.main(["coin", "--symbol", ex.symbol_for("BTC"), *argv])
         return code, out.getvalue(), err.getvalue()
 
     def binance(self, closes, hours_open):
@@ -329,7 +387,7 @@ class CoinCliTest(unittest.TestCase):
                     self.assertEqual(len(fake.calls), 2)
                     self.assertIn("보유 없음", out)
                     saved = json.loads(Path(state).read_text(encoding="utf-8"))
-                    self.assertEqual(saved["last_date"], "2026-10-13T10:00:00Z")
+                    self.assertEqual(saved["last_seen"], {"BTCUSDT": "2026-10-13T10:00:00Z"})
                     self.assertEqual((saved["exchange"], saved["currency"]), ("BINANCE", "USDT"))
             finally:
                 fake.close()
@@ -340,7 +398,7 @@ class CoinCliTest(unittest.TestCase):
             PaperBroker(cash=Decimal(1_000_000), currency="KRW", exchange="UPBIT").save(state)
             code, _, err = self.run_coin(self.binance(CLOSES, 11.5), "--state", str(state), "--dry-run")
         self.assertEqual(code, 2)
-        self.assertIn("UPBIT(KRW) 계좌", err)
+        self.assertIn("UPBIT spot(KRW) 계좌", err)
 
     def test_upbit_dry_run_prints_won(self):
         now = START + timedelta(hours=len(CLOSES) - 0.5)
@@ -353,7 +411,52 @@ class CoinCliTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("[dry-run]", out)
         self.assertIn("원", out)
-        self.assertIn("UPBIT KRW-BTC 1h봉 11개", out)
+        self.assertIn("UPBIT spot 1h봉 · KRW-BTC 11개", out)
+
+    def test_futures_long_short_round_trip(self):
+        closes = [100, 99, 98, 97, 96, 95, 101, 104, 106, 99, 97, 300]
+        now = START + timedelta(hours=len(closes) - 0.5)
+        ex = BinanceFutures(fetch=lambda url: binance_rows(closes, START))
+        real = ex.fetch_candles
+        ex.fetch_candles = lambda symbol, interval, limit: real(symbol, interval, limit, now=now)
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict("os.environ", {}, clear=True):
+            state = Path(d) / "f.json"
+            code, out, _ = self.run_coin(ex, "--market", "futures", "--leverage", "3", "--window", "3", "--state", str(state),
+                                         "--dry-run")
+            saved = json.loads(state.read_text(encoding="utf-8"))
+        self.assertEqual(code, 0, out)
+        self.assertIn("[선물 롱 진입 3x]", out)
+        self.assertIn("[선물 롱 정리]", out)
+        self.assertIn("[선물 숏 진입 3x]", out)
+        self.assertEqual(saved["market"], "futures")
+        self.assertEqual(saved["positions"]["BTCUSDT"]["side"], "SHORT")  # 마지막에 꺾여 숏을 들고 있다
+
+    def test_futures_rules(self):
+        code, _, err = self.run_coin(BinanceFutures(fetch=lambda url: []), "--market", "futures", "--leverage", "5", "--dry-run")
+        self.assertEqual(code, 2)
+        self.assertIn("1~3배", err)
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = cli.main(["coin", "--exchange", "upbit", "--market", "futures", "--dry-run"])
+        self.assertEqual(code, 2)
+        self.assertIn("선물은 바이낸스만", err.getvalue())
+
+    def test_default_trades_five_coins_in_one_account(self):
+        urls = []
+        now = START + timedelta(hours=len(CLOSES) - 0.5)
+        ex = Upbit(fetch=lambda url: urls.append(url) or upbit_rows([c * 1000 for c in CLOSES], START))
+        real = ex.fetch_candles
+        ex.fetch_candles = lambda symbol, interval, limit: real(symbol, interval, limit, now=now)
+        out, err = io.StringIO(), io.StringIO()
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict("os.environ", {}, clear=True), redirect_stdout(out), \
+                mock.patch.dict(cli.EXCHANGES, {("upbit", "spot"): lambda: ex}):
+            code = cli.main(["coin", "--exchange", "upbit", "--window", "3", "--state", str(Path(d) / "u.json"), "--dry-run"])
+            saved = json.loads((Path(d) / "u.json").read_text(encoding="utf-8"))
+        self.assertEqual(code, 0)
+        self.assertEqual(COINS, ["BTC", "ETH", "XRP", "SOL", "DOGE"])
+        self.assertEqual([u.split("market=")[1].split("&")[0] for u in urls], ["KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL", "KRW-DOGE"])
+        self.assertEqual(sorted(saved["last_seen"]), ["KRW-BTC", "KRW-DOGE", "KRW-ETH", "KRW-SOL", "KRW-XRP"])
+        self.assertIn("도지코인", out.getvalue())
 
     def test_network_failure_keeps_state_and_exits_1(self):
         def down(url):

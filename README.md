@@ -11,28 +11,66 @@
 
 ```bash
 cd app/trade-bot
-python3 -m devlog_trade coin --exchange binance --dry-run              # BTCUSDT 1시간봉, 1,000 USDT 모의 계좌
-python3 -m devlog_trade coin --exchange upbit --dry-run                # KRW-BTC 1시간봉, 100만 원 모의 계좌
-python3 -m devlog_trade coin --exchange binance --symbol ETHUSDT --interval 15m --dry-run
+python3 -m devlog_trade coin --exchange binance --dry-run                                   # 현물, 코인 5종, 1시간봉
+python3 -m devlog_trade coin --exchange upbit --interval 15m --dry-run                      # 업비트 원화 마켓 15분봉
+python3 -m devlog_trade coin --exchange binance --market futures --leverage 3 --dry-run     # USDT-M 선물, 3배
+python3 -m devlog_trade coin --exchange binance --coins BTC,ETH --interval 4h --dry-run      # 코인 골라서
 ```
 
-- **현물** 모의매매예요. 레버리지·공매도·펀딩비는 없어요(바이낸스 무기한 선물이 아니라 현물 BTCUSDT 시세를 써요).
-- 시세: 바이낸스 `GET /api/v3/klines`(시세 전용 주소 `data-api.binance.vision`), 업비트 `GET /v1/candles/minutes/60` 같은 공개 캔들. 봉 간격은 `1m 5m 15m 30m 1h 4h 1d`.
-- **다 만들어진 봉의 종가로만** 판단하고, 그 봉이 닫힌 시각을 체결 시각으로 남겨요. 아직 진행 중인 봉으로는 거래하지 않아요.
-- 처음 실행하면 받은 봉(기본 200개) 전체로 전략을 돌려요. 그 뒤로는 상태 파일에 남은 **마지막 봉 시각** 뒤의 새 봉에서만 체결해서, 같은 봉을 두 번 거래하지 않아요.
-- 기본값: 시드 바이낸스 1,000 USDT · 업비트 1,000,000원, 한 번 살 때 100 USDT · 100,000원, 수수료 바이낸스 0.1% · 업비트 0.05%, 매도세 없음. `--cash`, `--budget`, `--fee-rate`로 바꿔요. 수수료는 쓰는 등급·쿠폰에 따라 다르니 확인해 넣어 주세요.
-- 수량은 소수 8자리까지 버림으로 맞춰요(예: 0.00153846 BTC). 금액은 원화는 원 단위, USDT는 소수 8자리예요.
-- 상태 파일은 거래소·마켓마다 따로예요(기본 `trade-state-binance-BTCUSDT.json`). 다른 거래소 계좌 파일을 주면 멈춰요.
-- devlog에는 `exchange`(BINANCE·UPBIT)와 `currency`(USDT·KRW)가 함께 가요. 원화와 USDT는 매매 일지에서 따로 합산돼요.
-- 바이비트는 `devlog_trade/exchanges.py`에 같은 모양의 `Exchange`를 하나 더 두면 붙어요.
+| 고를 것 | 값 | 기본 |
+|---|---|---|
+| 거래소·시장 | 바이낸스 현물·USDT-M 선물, 업비트 현물(업비트는 선물이 없어요) | 바이낸스 현물 |
+| 코인 `--coins` | BTC, ETH, XRP, SOL, DOGE | 5종 모두 |
+| 봉 간격 `--interval` | 1m, 5m, 15m, 30m, 1h, 4h, 1d | 1h |
+| 시드 `--cash` | 바이낸스 1,000 USDT · 업비트 1,000,000원 (계좌 하나에 코인 5종이 같이 들어요) | |
+| 한 번 들어갈 금액 `--budget` | 바이낸스 100 USDT · 업비트 100,000원 (선물은 증거금) | |
+| 수수료 `--fee-rate` | 바이낸스 현물 0.1% · 선물 0.05% · 업비트 0.05%, 매도세 없음 | |
+| 레버리지 `--leverage` | 선물만, 1~3배 | 1배 |
 
-매시 정각 조금 뒤에 돌리면 막 닫힌 1시간봉을 봐요.
+- 시세는 API 키 없이 공개 캔들만 받아요. 바이낸스 현물 `data-api.binance.vision/api/v3/klines`, 선물 `fapi.binance.com/fapi/v1/klines`, 업비트 `api.upbit.com/v1/candles/…`. 선물 시세 주소는 나라에 따라 막힐 수 있어요.
+- **다 만들어진 봉의 종가로만** 판단하고, 그 봉이 닫힌 시각을 체결 시각으로 남겨요. 진행 중인 봉으로는 거래하지 않아요.
+- 처음 실행하면 받은 봉(종목마다 기본 200개) 전체로 전략을 돌려요. 그 뒤로는 상태 파일에 종목마다 남은 **마지막 봉 시각** 뒤의 새 봉에서만 체결해서 같은 봉을 두 번 거래하지 않아요. `--dry-run`도 상태 파일을 앞으로 옮겨요. 처음부터 다시 하려면 상태 파일을 지우세요.
+- 상태 파일은 거래소·시장·봉 간격마다 따로예요(기본 `trade-state-binance-spot-1h.json`). 다른 계좌 파일을 주면 멈춰요.
+- 수량은 소수 8자리에서 버려요. 금액은 원화는 원 단위, USDT는 소수 8자리예요.
+- devlog에는 `exchange`(BINANCE·UPBIT)와 `currency`(USDT·KRW)가 함께 가요. 원화와 USDT는 매매 일지에서 따로 합산돼요.
+- 1분·5분봉에 코인 5종을 돌리면 체결이 많아져요. devlog 매매 일지는 하루 500건까지라, 짧은 봉은 코인을 줄이거나 `--window`를 키워 주세요.
+
+### 선물 (바이낸스 USDT-M 무기한)
+
+- 종가가 이동평균선을 위로 뚫으면 **롱**, 아래로 뚫으면 **숏**으로 들어가요. 반대 신호가 오면 먼저 정리하고 반대로 들어가요. 손절선(`--stop-loss`, 기본 3%)에 닿으면 정리해요.
+- 증거금 = 명목 금액 ÷ 레버리지, 종목마다 따로(격리)예요. 봉 종가에서 손실이 증거금을 다 쓰면 강제 청산으로 남겨요. 유지 증거금과 **펀딩비는 아직 계산하지 않아요**.
+- 매매 일지에는 롱 진입 BUY·정리 SELL, 숏 진입 SELL·정리 BUY로 남고, 종목 이름이 "비트코인 선물", 이유 앞에 `[선물 숏 진입 3x]`처럼 붙어요.
+
+### 정해 둔 작업을 한 번에 (jobs.conf)
+
+`jobs.conf`에 줄마다 `coin` 옵션을 적고 `python3 -m devlog_trade jobs jobs.conf`로 차례로 돌려요. `--every 300`을 붙이면 5분마다 계속 돌아요. 맥 launchd와 Docker가 이 파일을 써요. 처음 받은 파일은 모두 `--dry-run`이라, 화면을 보고 괜찮으면 지워 주세요.
+
+### 맥북 덮개를 닫고 돌리기
+
+1. 토큰을 키체인에 넣어요(파일에 적지 않아요).
+   ```bash
+   security add-generic-password -a "$USER" -s devlog-trade-bot -w   # 물으면 devlog 쓰기 토큰을 붙여 넣어요
+   ```
+2. launchd에 등록해요. 5분마다 `jobs.conf`를 돌리고, 도는 동안은 `caffeinate`가 잠들지 않게 잡아 줘요. 1분봉을 쓰면 `60`을 주세요.
+   ```bash
+   ./macos/install.sh 300          # 내리기: ./macos/install.sh --uninstall
+   tail -f ~/Library/Logs/devlog-trade-bot.log
+   ```
+3. 덮개를 닫아도 깨어 있게 해요. 둘 중 하나예요.
+   - **외장 모니터가 있으면**: 전원 어댑터와 외장 모니터·키보드를 연결한 채 덮개를 닫으면 맥이 클램셸 모드로 계속 돌아요(애플이 지원하는 방법).
+   - **모니터 없이**: 전원을 꽂고 `sudo pmset -a disablesleep 1`을 한 번 실행하면 덮개를 닫아도 잠들지 않아요. 가방에 넣으면 뜨거워지니, 쓰지 않을 땐 `sudo pmset -a disablesleep 0`으로 되돌려 주세요.
+- 맥이 잠들었다 깨면 launchd가 놓친 실행을 바로 한 번 돌리고, 봇은 그 사이 닫힌 봉을 차례로 따라잡아요.
+
+### 집 PC로 옮길 때 (Docker)
 
 ```bash
-# macOS / Linux: crontab -e (매시 1분)
-1 * * * * cd /path/to/app/trade-bot && DEVLOG_TOKEN='…' python3 -m devlog_trade coin --exchange binance >> trade.log 2>&1
-1 * * * * cd /path/to/app/trade-bot && DEVLOG_TOKEN='…' python3 -m devlog_trade coin --exchange upbit >> trade.log 2>&1
+cd app/trade-bot
+echo "DEVLOG_TOKEN=…" > .env       # git에 올라가지 않아요
+docker compose up -d --build       # 5분마다 jobs.conf를 돌려요. 상태 파일은 ./data에 남아요
+docker compose logs -f
 ```
+
+맥에서 쓰던 `trade-state-*.json`을 `./data`로 옮기면 이어서 돌아요. Docker 없이 Windows에서 돌리려면 작업 스케줄러에 `python -m devlog_trade jobs jobs.conf`를 5분마다 걸어도 돼요.
 
 ## 1. 먼저 화면에만 돌려 보기 (종가 CSV)
 

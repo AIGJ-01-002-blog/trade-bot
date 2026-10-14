@@ -1,3 +1,5 @@
 trade-state*.json
 demo-state*.json
 __pycache__/
+.env
+data/
