@@ -21,6 +21,7 @@ from .journal import Journal, JournalError
 from .strategy import Bar, MovingAverageCross, read_bars
 
 KST = timezone(timedelta(hours=9))
+COIN_STEP = Decimal("0.00000001")  # 코인 수량·USDT 금액은 소수 8자리까지
 LIVE_REFUSED = "실계좌 주문은 이 예제에 없어요. 되돌릴 수 없는 주문이라 직접 코드를 더하고 직접 켜야 해요."
 
 
@@ -35,7 +36,7 @@ def _pending_path(state: Path) -> Path:
 
 
 def _amount(v: Decimal, currency: str) -> str:
-    return f"{v:,.0f}원" if currency == "KRW" else f"{v.normalize():f} {currency}"
+    return f"{v:,.0f}원" if currency == "KRW" else f"{v.quantize(COIN_STEP).normalize():f} {currency}"
 
 
 class Session:
@@ -115,9 +116,6 @@ def run(args: argparse.Namespace) -> int:
     s.save()
     print(s.summary())
     return 0 if ok else 1
-
-
-COIN_STEP = Decimal("0.00000001")  # 코인 수량은 소수 8자리까지
 
 
 def coin(args: argparse.Namespace, exchange: Exchange | None = None) -> int:
