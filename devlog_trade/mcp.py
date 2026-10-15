@@ -44,6 +44,16 @@ def _num(v: Decimal) -> str:
     return f"{v.quantize(COIN_STEP).normalize():f}"
 
 
+def _mode(path: Path) -> str:
+    """상태 파일이 어떤 돈인지. 실계좌 파일은 테스트넷으로 돌린 기록(testnet)이 있으면 TESTNET이다"""
+    if not path.name.startswith("trade-live-"):
+        return "PAPER"
+    try:
+        return "TESTNET" if json.loads(path.read_text(encoding="utf-8")).get("testnet") else "LIVE"
+    except (OSError, ValueError):
+        return "LIVE"
+
+
 def _sma(closes: list[Decimal], n: int) -> str | None:
     return _num(sum(closes[-n:], Decimal(0)) / n) if len(closes) >= n else None
 
@@ -167,9 +177,10 @@ class TradeBotTools:
         return FuturesBroker.load(path) if data.get("market") == "futures" else PaperBroker.load(path)
 
     def accounts(self, with_prices: bool = True) -> dict:
+        """mode: PAPER(모의), TESTNET(거래소 테스트넷, 가짜 돈), LIVE(실거래소)"""
         out, prices = [], {}
         for path in sorted(self.root.glob("trade-*-*.json")):
-            if not ACCOUNT_FILE.match(path.name) or path.name.endswith(".pending.json"):
+            if not ACCOUNT_FILE.match(path.name) or path.name.endswith((".pending.json", ".ladder.json")):
                 continue
             try:
                 b = self._load(path)
@@ -177,7 +188,7 @@ class TradeBotTools:
                 out.append({"account": path.name, "error": f"읽지 못했어요: {e}"})
                 continue
             exchange = (b.exchange or "").lower()
-            acc = {"account": path.name, "mode": "LIVE" if path.name.startswith("trade-live-") else "PAPER", "exchange": b.exchange,
+            acc = {"account": path.name, "mode": _mode(path), "exchange": b.exchange,
                    "market": b.market, "currency": b.currency, "cash": _num(b.cash), "positions": []}
             if b.market == "futures":
                 acc["available"], acc["leverage"] = _num(b.available()), _num(b.leverage)
@@ -259,7 +270,7 @@ class TradeBotTools:
             raise ToolError(str(e)) from e
         except (live_orders.LiveOrderError, ValueError, ArithmeticError) as e:
             raise ToolError(f"주문하지 못했어요: {e}") from e
-        result = {"account": account, "mode": "LIVE" if is_live else "PAPER", "symbol": symbol, "action": action,
+        result = {"account": account, "mode": _mode(path), "symbol": symbol, "action": action,
                   "reference_price": _num(price), "filled": fill is not None, "account_after": s.broker.describe(),
                   "recorded": ("devlog에 남겼어요" if sent else "devlog에 못 남겨 다음 봇 실행 때 다시 보내요") if self.record and fill
                   else "devlog에 남기지 않았어요(서버가 --record 없이 떠 있음)" if fill else None}

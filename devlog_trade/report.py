@@ -128,7 +128,7 @@ def build(folder: Path, accounts: dict, now: datetime) -> tuple[dict, dict]:
     out = []
     for acc in accounts.get("accounts", []):
         name = acc.get("account", "")
-        if "error" in acc or is_live(name) or acc.get("mode") == "LIVE":
+        if "error" in acc or is_live(name) or acc.get("mode", "PAPER") != "PAPER":
             continue
         row = {k: v for k, v in acc.items() if k not in ("mode", "unsent_fills", "available", "leverage")}
         row["rules"] = rules.get(name, {})

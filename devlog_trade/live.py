@@ -457,7 +457,7 @@ class LiveState:
             return None
 
     def _live_fields(self) -> dict:
-        return {"mode": self.mode, "day": self.day, "day_pnl": str(self.day_pnl), "halted": self.halted}
+        return {"mode": self.mode, "testnet": self.trader.testnet, "day": self.day, "day_pnl": str(self.day_pnl), "halted": self.halted}
 
     def _restore(self, data: dict) -> None:
         self.day, self.day_pnl, self.halted = data.get("day", ""), Decimal(data.get("day_pnl", "0")), data.get("halted", "")
@@ -476,6 +476,9 @@ class LiveState:
         data = json.loads(path.read_text(encoding="utf-8"))
         if data.get("mode") != "LIVE" or data.get("exchange") != trader.code or data.get("market", "spot") != trader.market:
             raise LiveRefused(f"{path}은 실계좌 {trader.code} {trader.market} 상태 파일이 아니에요. --state로 다른 파일을 주세요.")
+        if "testnet" in data and bool(data["testnet"]) != trader.testnet:  # 테스트넷 장부와 실거래소 장부가 섞이지 않게
+            where = "테스트넷" if data["testnet"] else "실거래소"
+            raise LiveRefused(f"{path}은 {where} 장부예요. --state로 다른 파일을 주세요.")
         return data
 
 

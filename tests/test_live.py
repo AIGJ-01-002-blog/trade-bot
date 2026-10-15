@@ -119,6 +119,18 @@ class SwitchTest(unittest.TestCase):
         self.assertEqual((b.cash, b.mode, b.exchange), (Decimal(500), "LIVE", "BINANCE"))
         self.assertTrue(all(c[1] == "testnet.binance.vision" for c in fx.calls))
 
+    def test_testnet_ledger_is_marked_and_not_reused_on_mainnet(self):
+        fx = FakeExchange()
+        binance_spot(fx)
+        env = {"BINANCE_TESTNET_API_KEY": "k", "BINANCE_TESTNET_API_SECRET": "s", "BINANCE_API_KEY": "k", "BINANCE_API_SECRET": "s",
+               "DEVLOG_TRADE_LIVE": "1"}
+        with mock.patch.dict(os.environ, env, clear=True), tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "live.json"
+            open_live(self.args(live=True, testnet=True), "binance", "spot", path, send=fx).save(path)
+            self.assertIs(json.loads(path.read_text(encoding="utf-8"))["testnet"], True)
+            with self.assertRaisesRegex(LiveRefused, "테스트넷 장부"):
+                open_live(self.args(live=True), "binance", "spot", path, send=fx)
+
 
 class KeyCheckTest(unittest.TestCase):
     def test_binance_key_with_withdrawals_is_refused(self):
@@ -286,7 +298,7 @@ class LiveBrokerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "live.json"
             b.save(path)
-            again = LiveBroker.open_state(path, spot_trader(fx, testnet=True), LIMITS)
+            again = LiveBroker.open_state(path, spot_trader(fx), LIMITS)
         self.assertEqual((again.halted, again.holding("BTCUSDT"), again.mode), ("테스트", Decimal("0.002"), "LIVE"))
 
 
