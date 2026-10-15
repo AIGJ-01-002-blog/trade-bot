@@ -42,6 +42,24 @@ def payload(fill: Fill, mode: str = "PAPER", strategy: str = "") -> dict:
     return {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "record_trade", "arguments": args}}
 
 
+def call_tool(url: str, token: str, name: str, arguments: dict, timeout: float = 15) -> str:
+    """devlog MCP 도구 하나를 JSON-RPC로 부르고 글자 결과를 돌려준다. 도구 오류는 JournalError로 올린다"""
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}},
+                      default=lambda v: str(v) if isinstance(v, Decimal) else v).encode("utf-8")
+    req = urllib.request.Request(url, data=body, method="POST", headers={
+        "Content-Type": "application/json", "Accept": "application/json", "Authorization": "Bearer " + token})
+    with urllib.request.urlopen(req, timeout=timeout) as res:  # noqa: S310 (devlog 주소만 부른다)
+        try:
+            data = json.loads(res.read().decode("utf-8"))
+        except ValueError as e:  # 프록시 오류 화면처럼 JSON이 아닌 응답
+            raise JournalError(f"devlog 응답을 읽지 못했어요: {e}") from e
+    result = data.get("result") or {}
+    text = "".join(c.get("text", "") for c in result.get("content", []))
+    if data.get("error") or result.get("isError"):
+        raise JournalError(text or str(data.get("error")))
+    return text
+
+
 class Journal:
     def __init__(self, server: str, token: str, timeout: float = 15):
         if not token:
@@ -51,16 +69,5 @@ class Journal:
         self.timeout = timeout
 
     def record(self, fill: Fill, mode: str = "PAPER", strategy: str = "") -> str:
-        body = json.dumps(payload(fill, mode, strategy), default=lambda v: str(v) if isinstance(v, Decimal) else v).encode("utf-8")
-        req = urllib.request.Request(self.url, data=body, method="POST", headers={
-            "Content-Type": "application/json", "Accept": "application/json", "Authorization": "Bearer " + self.token})
-        with urllib.request.urlopen(req, timeout=self.timeout) as res:  # noqa: S310 (devlog 주소만 부른다)
-            try:
-                data = json.loads(res.read().decode("utf-8"))
-            except ValueError as e:  # 프록시 오류 화면처럼 JSON이 아닌 응답
-                raise JournalError(f"devlog 응답을 읽지 못했어요: {e}") from e
-        result = data.get("result") or {}
-        text = "".join(c.get("text", "") for c in result.get("content", []))
-        if data.get("error") or result.get("isError"):
-            raise JournalError(text or str(data.get("error")))
-        return text
+        params = payload(fill, mode, strategy)["params"]
+        return call_tool(self.url, self.token, params["name"], params["arguments"], self.timeout)

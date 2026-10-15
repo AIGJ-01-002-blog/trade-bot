@@ -13,12 +13,12 @@ import shlex
 import sys
 import time
 from dataclasses import asdict
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import ROUND_FLOOR, Decimal
 from pathlib import Path
 from typing import Callable
 
-from . import __version__, ai, ladder, live
+from . import __version__, ai, ladder, live, report
 from .broker import Fill, PaperBroker, state_lock
 from .exchanges import COINS, EXCHANGES, INTERVALS, Exchange, ExchangeError
 from .futures import FuturesBroker
@@ -84,6 +84,8 @@ class Session:
     def _add(self, fill: Fill | None) -> None:
         if fill:
             self.pending.append(fill)
+            # devlog 자동매매 화면(/trade)용. 실계좌 체결은 report가 빼고, 매매 일지 보내기와 따로 다음 알림 때 나간다
+            report.add_event(self.state.parent, report.fill_event(self.state.name, self.broker.market, fill))
 
     def trade(self, strategy: MovingAverageCross, bars: list[Bar], quantity: Callable[[Decimal], Decimal],
               executed_at: Callable[[Bar], str]) -> None:
@@ -222,6 +224,9 @@ def _coin_session(args: argparse.Namespace, ex: Exchange, symbols: list[str], fe
     if args.rule == "ladder":
         if args.strategy == "ma-cross":
             args.strategy = ladder.VERSION
+        report.set_rules(s.state.parent, s.state.name, {
+            "전략": f"{ladder.VERSION} 세 겹 거름망", "봉": "1h", "코인": ", ".join(symbols), "레버리지 상한": f"{MAX_LEVERAGE}배",
+            "모드": "모의(--dry-run)" if args.dry_run else "모의"})
         got, seen = ladder.run(s, ex, symbols, args.limit, int(MAX_LEVERAGE),
                                lambda k: k.close_time.astimezone(KST).isoformat(timespec="seconds"))
         ok = s.send_all() and got and ok
@@ -230,12 +235,27 @@ def _coin_session(args: argparse.Namespace, ex: Exchange, symbols: list[str], fe
         return 0 if ok else 1
     budget = Decimal(args.budget) if args.budget else ex.default_budget
     rule = MovingAverageCross(window=args.window, stop_loss=Decimal(args.stop_loss), period=f"개 {args.interval}봉")
+    closed_at: dict[str, datetime] = {}  # 봉 시작 시각 → 닫힌 시각. 종목마다 아래에서 채운다
+
+    def verdict(bar: Bar, verdict: str, side: str, reason: str) -> None:  # AI 진입 판단을 자동매매 화면에 남긴다
+        at = closed_at.get(bar.symbol + bar.date)
+        report.add_event(s.state.parent, report.ai_event(
+            s.state.name, bar.symbol, bar.date, verdict, side, reason,
+            at.astimezone(KST).isoformat(timespec="seconds") if at else datetime.now(KST).isoformat(timespec="seconds")))
+
     try:
-        strategy, args.strategy = ai.wrap(args, rule, args.interval, INTERVALS, b)  # AI_DECISION=on일 때만 (#263)
+        strategy, args.strategy = ai.wrap(args, rule, args.interval, INTERVALS, b, verdict)  # AI_DECISION=on일 때만 (#263)
     except ai.AiError as e:
         print(e, file=sys.stderr)
         s.save()
         return 2
+    model = strategy.client.label if isinstance(strategy, ai.AiStrategy) else ""
+    rules = {"전략": f"{args.window}봉 이동평균 교차", "봉": args.interval, "코인": ", ".join(symbols),
+             "한 번 금액": _amount(budget, ex.currency), "손절": f"{(Decimal(args.stop_loss) * 100).normalize():f}%",
+             "AI 판단": f"켜짐 ({model})" if model else "꺼짐", "모드": "모의(--dry-run)" if args.dry_run else "모의"}
+    if ex.market == "futures":
+        rules["레버리지"] = f"{b.leverage:f}배"
+    report.set_rules(s.state.parent, s.state.name, rules, model)
     seen = []
     for symbol in symbols:
         try:
@@ -247,8 +267,9 @@ def _coin_session(args: argparse.Namespace, ex: Exchange, symbols: list[str], fe
         name = ex.coin_name(symbol)
         # 봉 시작 시각(UTC ISO)을 순서 키로 쓴다. 상태 파일에 종목마다 남아 같은 봉을 두 번 거래하지 않는다
         bars = [Bar(c.open_time.strftime("%Y-%m-%dT%H:%M:%SZ"), symbol, name, c.close) for c in candles]
-        closed_at = {bar.date: c.close_time for bar, c in zip(bars, candles)}
-        s.trade_coin(strategy, symbol, bars, budget, lambda bar: closed_at[bar.date].astimezone(KST).isoformat(timespec="seconds"))
+        closed_at.update({symbol + bar.date: c.close_time for bar, c in zip(bars, candles)})
+        s.trade_coin(strategy, symbol, bars, budget,
+                     lambda bar: closed_at[bar.symbol + bar.date].astimezone(KST).isoformat(timespec="seconds"))
         seen.append(f"{symbol} {len(candles)}개")
     ok = s.send_all() and ok
     s.save()
@@ -271,6 +292,11 @@ def jobs(args: argparse.Namespace) -> int:
             except SystemExit as e:  # 작업 파일에 잘못 적은 옵션
                 code = int(e.code or 2)
             worst = max(worst, code)
+            sys.stdout.flush()
+        if not args.no_report and report.enabled():  # 화면 알림이 실패해도 종료 코드는 매매 결과만 따른다
+            from .mcp import TradeBotTools  # mcp가 이 모듈을 불러서 여기서 늦게 부른다
+            report.report(Path("."), TradeBotTools(Path(".")).accounts, os.environ.get("DEVLOG_SERVER", "https://devlog.life"),
+                          os.environ.get("DEVLOG_TOKEN", ""))
             sys.stdout.flush()
         if not args.every:
             return worst
@@ -324,6 +350,8 @@ def main(argv: list[str] | None = None) -> int:
     j = sub.add_parser("jobs", help="작업 파일(줄마다 coin 옵션)을 차례로 돌려요. 맥 launchd·Docker가 써요")
     j.add_argument("file", help="예: jobs.conf")
     j.add_argument("--every", type=int, default=0, help="이 간격(초)으로 계속 돌아요. 안 주면 한 번만")
+    j.add_argument("--no-report", action="store_true",
+                   help="한 바퀴 뒤 devlog 자동매매 화면(/trade)에 계좌·체결을 알리지 않아요 (환경 변수 TRADE_REPORT=off와 같아요)")
 
     args = p.parse_args(argv)
     return {"run": run, "coin": coin, "jobs": jobs}[args.command](args)

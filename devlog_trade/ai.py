@@ -324,9 +324,11 @@ class AiStrategy:
     Session.trade_coin이 부르는 on_bar(현물)·on_bar_futures(선물) 모양을 그대로 따른다"""
 
     def __init__(self, rule, client: Client, budget: Budget, interval: str, since: dict[str, str], account: Account,
-                 history: int = 60, log: Callable[[str], None] = lambda m: print(m, file=sys.stderr)):
+                 history: int = 60, log: Callable[[str], None] = lambda m: print(m, file=sys.stderr),
+                 on_verdict: Callable[[Bar, str, str, str], None] | None = None):
         self.rule, self.client, self.budget, self.interval = rule, client, budget, interval
         self.since, self.account, self.history, self.log = dict(since), account, history, log
+        self.on_verdict = on_verdict  # (봉, ALLOW·BLOCK, 행동, 이유). devlog 자동매매 화면에 AI 판단을 알린다
         self.bars: dict[str, list[Bar]] = {}
         self.warned = False
 
@@ -351,6 +353,7 @@ class AiStrategy:
         except (AiError, OSError, ValueError, KeyError, TypeError) as e:
             self.budget.record(getattr(e, "cost_krw", Decimal(0)))
             self.log(f"AI 판단을 받지 못해 관망해요 ({bar.symbol} {bar.date}): {e}")
+            self.reason = "AI 판단을 받지 못해 관망"
             return "HOLD"
         self.budget.record(reply.cost_krw if reply.cost_krw is not None else self.client.cost_krw(reply))
         self.reason = "AI: " + reply.reason
@@ -367,9 +370,9 @@ class AiStrategy:
         action = self._ask(bar, position, f"{rule_signal.side} ({rule_signal.reason})" if rule_signal else "신호 없음")
         if action is None:
             return rule_signal
-        if action == "BUY" and not holding or action == "SELL" and holding:
-            return Signal(action, self.reason)
-        return None
+        chosen = Signal(action, self.reason) if action == "BUY" and not holding or action == "SELL" and holding else None
+        self._verdict(bar, [rule_signal] if rule_signal else [], [chosen] if chosen else [])
+        return chosen
 
     def on_bar_futures(self, bar: Bar, side: str | None, entry: Decimal) -> list[Signal]:
         rule_signals = self.rule.on_bar_futures(bar, side, entry)
@@ -383,10 +386,22 @@ class AiStrategy:
         if action is None:
             return rule_signals
         if action == "CLOSE":
-            return [Signal("CLOSE", self.reason)] if side else []
-        if action in ("LONG", "SHORT") and side != action:
-            return ([Signal("CLOSE", self.reason)] if side else []) + [Signal(action, self.reason)]
-        return []
+            chosen = [Signal("CLOSE", self.reason)] if side else []
+        elif action in ("LONG", "SHORT") and side != action:
+            chosen = ([Signal("CLOSE", self.reason)] if side else []) + [Signal(action, self.reason)]
+        else:
+            chosen = []
+        self._verdict(bar, rule_signals, chosen)
+        return chosen
+
+    def _verdict(self, bar: Bar, rule_signals: list[Signal], chosen: list[Signal]) -> None:
+        """AI가 주문을 냈으면 ALLOW, 규칙 신호가 있었는데 AI가 쉬었으면 BLOCK. 둘 다 없는 관망은 알리지 않는다"""
+        if self.on_verdict is None:
+            return
+        if chosen:
+            self.on_verdict(bar, "ALLOW", chosen[-1].side, self.reason)
+        elif rule_signals:
+            self.on_verdict(bar, "BLOCK", rule_signals[-1].side, getattr(self, "reason", "AI가 관망"))
 
     def prompt(self, bar: Bar, position: str, hint: str) -> str:
         a = self.account
@@ -458,7 +473,8 @@ def make_client(args: argparse.Namespace) -> Client:
     return Gemini(os.environ.get("GEMINI_API_KEY", ""), model or "gemini-2.5-flash-lite", price=price)
 
 
-def wrap(args: argparse.Namespace, rule, interval: str, intervals: dict[str, timedelta], broker) -> tuple[object, str]:
+def wrap(args: argparse.Namespace, rule, interval: str, intervals: dict[str, timedelta], broker,
+         on_verdict: Callable[[Bar, str, str, str], None] | None = None) -> tuple[object, str]:
     """AI가 켜져 있고 봉이 15분 이상이면 규칙 전략을 감싼 AiStrategy와 그 이름을, 아니면 규칙 전략을 그대로 돌려준다.
     키가 없으면 AiError를 낸다(켜 놓고 키를 빠뜨린 걸 조용히 넘기지 않는다)"""
     if not enabled(args):
@@ -471,5 +487,5 @@ def wrap(args: argparse.Namespace, rule, interval: str, intervals: dict[str, tim
     market = getattr(broker, "market", "spot")
     cash = broker.available if market == "futures" else (lambda: broker.cash)
     account = Account(cash, broker.currency, broker.fee_rate, market, getattr(broker, "leverage", Decimal(1)))
-    return (AiStrategy(rule, client, budget, interval, broker.last_seen, account),
+    return (AiStrategy(rule, client, budget, interval, broker.last_seen, account, on_verdict=on_verdict),
             f"{args.strategy}+ai:{client.label}"[:60])

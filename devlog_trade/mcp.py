@@ -252,8 +252,7 @@ class TradeBotTools:
                                               strategy=STRATEGY)
                     s = Session(args, None)
                 fill = self._place(s.broker, ex, symbol, action, price, amount, fraction, f"[대화 주문] {reason}", at)
-                if fill:
-                    s.pending.append(fill)
+                s._add(fill)  # 매매 일지 보내기와 자동매매 화면 알림(report)을 봇 체결과 같은 길로
                 sent = s.send_all()
                 s.save()
         except TimeoutError as e:
