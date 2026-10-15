@@ -31,8 +31,8 @@ class NotifyTest(unittest.TestCase):
         self.assertIn("[🔴 실거래] 매수 비트코인", t)
         self.assertIn("가격 150,000,000원", t)
         self.assertIn("금액 6,000원", t)
-        self.assertIn("목표가 156,000,000원 (+4%)", t)
-        self.assertIn("손절가 147,000,000원 (-2%)", t)
+        self.assertIn("**익절가 156,000,000원 (+4%)**", t)
+        self.assertIn("**손절가 147,000,000원 (-2%)**", t)
         self.assertIn("잔액 현금 4,000원", t)
 
     def test_sell_shows_profit_and_day(self):
@@ -40,14 +40,15 @@ class NotifyTest(unittest.TestCase):
         self.assertIn("[📝 모의] 매도", t)
         self.assertIn("이번 손익 +234원 (+3.90%)", t)
         self.assertIn("오늘 손익 +234원", t)
-        self.assertNotIn("목표가", t)
+        self.assertNotIn("익절가", t)
+        self.assertTrue(t.startswith("🎯 **익절**"))  # 익절·손절로 나간 매도는 맨 위에 굵게
 
     def test_short_entry_flips_target_and_stop(self):
         f = Fill("x3", "BTCUSDT", "비트코인", "SELL", Decimal("0.01"), Decimal(100000), Decimal("0.5"), None, "숏", "2026-10-15T19:00:00+09:00",
                  "BINANCE", "USDT")
         t = notify.text("PAPER", "a", "futures", f, notify.Plan(Decimal("0.02"), Decimal("0.04")), "지갑 1000 USDT", None)
         self.assertIn("숏 진입", t)
-        self.assertIn("목표가 96000 USDT", t)
+        self.assertIn("익절가 96000 USDT", t)
         self.assertIn("손절가 102000 USDT", t)
 
     def test_routes_live_and_paper_to_their_own_channels(self):
@@ -73,7 +74,7 @@ class NotifyTest(unittest.TestCase):
     def test_bot_sends_every_fill_with_balance(self):
         sent = []
         with tempfile.TemporaryDirectory() as d, mock.patch.dict("os.environ", ENV, clear=True), \
-                mock.patch.object(notify, "_post", lambda url, body: sent.append((url, json.loads(body)["content"]))):
+                mock.patch.object(notify, "_post", lambda url, body: sent.append((url, json.loads(body)["embeds"][0]))):
             s = cli.Session(argparse.Namespace(state=str(Path(d) / "s.json"), dry_run=True),
                             lambda: PaperBroker(cash=Decimal(1000), currency="USDT", exchange="BINANCE"))
             s.plan = notify.Plan(Decimal("0.03"), Decimal(0))
@@ -81,9 +82,18 @@ class NotifyTest(unittest.TestCase):
             s.trade_coin(MovingAverageCross(window=3), "BTCUSDT", bars, Decimal(100), lambda bar: bar.date)
         self.assertEqual(len(sent), len(s.pending))
         self.assertTrue(all(url == "https://discord.test/paper" for url, _ in sent))
-        self.assertIn("손절가", sent[0][1])
-        self.assertIn("잔액 현금", sent[0][1])
-        self.assertIn("이번 손익", sent[1][1])
+        self.assertIn("손절가", sent[0][1]["description"])
+        self.assertIn("잔액 현금", sent[0][1]["description"])
+        self.assertIn("이번 손익", sent[1][1]["description"])
+        self.assertEqual(sent[0][1]["color"], notify.GREEN)  # 매수는 초록
+        self.assertEqual(sent[1][1]["color"], notify.RED)  # 매도는 빨강
+
+    def test_stop_loss_exit_is_bold_and_red(self):
+        f = Fill("x4", "KRW-BTC", "비트코인", "SELL", Decimal("0.00004"), Decimal(147000000), Decimal(3), Decimal(-123),
+                 "손절선 -2% 도달", "2026-10-15T22:00:00+09:00", "UPBIT", "KRW")
+        t = notify.text("LIVE", "a", "spot", f, notify.Plan(), "현금", None)
+        self.assertTrue(t.startswith("🛑 **손절**"))
+        self.assertEqual(notify.color(f), notify.RED)
 
 
 if __name__ == "__main__":

@@ -105,7 +105,7 @@ class Session:
         if mode == "LIVE" and getattr(trader, "testnet", False):
             mode = "TESTNET"
         notify.send(mode, notify.text(mode, self.state.name, self.broker.market, fill, self.plan, self.broker.describe(),
-                                      self.day_pnl if fill.realized_pnl is not None else None))
+                                      self.day_pnl if fill.realized_pnl is not None else None), colour=notify.color(fill))
 
     def _day(self, at: str) -> None:
         day = datetime.fromisoformat(at.replace("Z", "+00:00")).astimezone(KST).date().isoformat()

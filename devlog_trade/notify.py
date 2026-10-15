@@ -19,6 +19,8 @@ from .broker import Fill
 
 ENV = {"LIVE": "DISCORD_WEBHOOK_LIVE", "PAPER": "DISCORD_WEBHOOK_PAPER"}
 LABEL = {"LIVE": "🔴 실거래", "TESTNET": "🧪 테스트넷", "PAPER": "📝 모의"}
+# 사는 쪽(매수·롱)은 초록, 파는 쪽(매도·숏·정리)은 빨강 띠로 보인다
+GREEN, RED = 0x2ECC71, 0xE74C3C
 # 디스코드는 기본 urllib User-Agent를 막을 때가 있어 봇 이름을 준다
 AGENT = "DiscordBot (https://github.com/AIGJ-01-002-blog/trade-bot, 1)"
 
@@ -49,6 +51,18 @@ def _price(v: Decimal, currency: str) -> str:
     return f"{v:,.0f}원" if currency == "KRW" else f"{v.normalize():f} {currency}"
 
 
+def color(fill: Fill) -> int:
+    return GREEN if fill.side == "BUY" else RED
+
+
+def _exit_kind(reason: str) -> str:
+    if "손절" in reason:
+        return "🛑 **손절**"
+    if "익절" in reason:
+        return "🎯 **익절**"
+    return ""
+
+
 def text(mode: str, account: str, market: str, fill: Fill, plan: Plan, balance: str, day_pnl: Decimal | None) -> str:
     cur = fill.currency or "KRW"
     entry = fill.realized_pnl is None
@@ -58,14 +72,17 @@ def text(mode: str, account: str, market: str, fill: Fill, plan: Plan, balance: 
         what = "매수" if fill.side == "BUY" else "매도"
     lines = [f"**[{LABEL.get(mode, mode)}] {what} {fill.symbol_name or fill.symbol}** ({fill.symbol})",
              f"가격 {_price(fill.price, cur)} · 수량 {fill.quantity.normalize():f} · 금액 {_money(fill.price * fill.quantity, cur)}"]
+    kind = "" if entry else _exit_kind(fill.reason)
+    if kind:
+        lines.insert(0, kind)
     if entry:
         short = market == "futures" and fill.side == "SELL"
         if plan.take_profit > 0:
-            lines.append(f"목표가 {_price(fill.price * (1 - plan.take_profit if short else 1 + plan.take_profit), cur)} "
-                         f"(+{(plan.take_profit * 100).normalize():f}%)")
+            lines.append(f"**익절가 {_price(fill.price * (1 - plan.take_profit if short else 1 + plan.take_profit), cur)} "
+                         f"(+{(plan.take_profit * 100).normalize():f}%)**")
         if plan.stop_loss > 0:
-            lines.append(f"손절가 {_price(fill.price * (1 + plan.stop_loss if short else 1 - plan.stop_loss), cur)} "
-                         f"(-{(plan.stop_loss * 100).normalize():f}%)")
+            lines.append(f"**손절가 {_price(fill.price * (1 + plan.stop_loss if short else 1 - plan.stop_loss), cur)} "
+                         f"(-{(plan.stop_loss * 100).normalize():f}%)**")
     else:
         pnl = fill.realized_pnl
         cost = fill.price * fill.quantity - fill.fee - pnl  # 매수에 쓴 돈 (pnl = 판 돈 - 산 돈 - 수수료)
@@ -78,14 +95,19 @@ def text(mode: str, account: str, market: str, fill: Fill, plan: Plan, balance: 
     return "\n".join(lines)
 
 
-def send(mode: str, message: str, post: Post | None = None) -> bool:
-    """실거래는 LIVE 채널, 모의·테스트넷은 PAPER 채널로. 채널 주소가 없으면 False"""
+def send(mode: str, message: str, post: Post | None = None, colour: int | None = None) -> bool:
+    """실거래는 LIVE 채널, 모의·테스트넷은 PAPER 채널로. 채널 주소가 없으면 False.
+    색을 주면 왼쪽에 색 띠가 붙는 임베드로 보낸다(본문 4096자까지)"""
     url = os.environ.get(ENV["LIVE" if mode == "LIVE" else "PAPER"], "").strip()
     if not url:
         return False
     try:
-        (post or _post)(url, json.dumps({"content": message[:1900], "username": "devlog 매매 봇",
-                              "allowed_mentions": {"parse": []}}, ensure_ascii=False).encode("utf-8"))
+        body = {"username": "devlog 매매 봇", "allowed_mentions": {"parse": []}}
+        if colour is None:
+            body["content"] = message[:1900]
+        else:
+            body["embeds"] = [{"description": message[:4000], "color": colour}]
+        (post or _post)(url, json.dumps(body, ensure_ascii=False).encode("utf-8"))
         return True
     except Exception as e:  # noqa: BLE001 - 알림 실패가 매매를 멈추면 안 된다. 주소가 섞일 수 있어 종류만 남긴다
         print(f"디스코드 알림을 보내지 못했어요 ({type(e).__name__}). 매매는 그대로 진행해요.", file=sys.stderr)
