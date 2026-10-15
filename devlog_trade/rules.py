@@ -20,6 +20,7 @@ LADDER_FIELDS = ("coins", "paused")  # 거름망 기법은 자기 규칙이 있�
 MAX_COINS = 10
 WINDOW = (2, 60)
 STOP_LOSS = (Decimal("0.005"), Decimal("0.2"))
+RISK_PER_TRADE = Decimal("0.01")  # 세 겹 거름망 복리법(2026-10-15 민서님): 한 번 손실은 처음 현금의 1%까지
 ACCOUNT = re.compile(r"^trade-state-[A-Za-z0-9_.-]+\.json$")
 COIN = re.compile(r"^[A-Z0-9]{2,15}$")
 
@@ -78,11 +79,19 @@ def clean(account: str, values: dict, ladder: bool, max_budget: Decimal) -> dict
             if key == "stop_loss" and not STOP_LOSS[0] <= d <= STOP_LOSS[1]:
                 raise RuleError(f"stop_loss는 {STOP_LOSS[0]}~{STOP_LOSS[1]}(0.5%~20%) 사이예요.")
             if key == "budget" and not Decimal(0) < d <= max_budget:
-                raise RuleError(f"budget은 0보다 크고 {max_budget:f} 이하예요(처음 모의 현금의 절반).")
+                raise RuleError(f"budget은 0보다 크고 봇 기본값 {max_budget:f} 이하예요. AI는 비중을 줄이기만 할 수 있어요.")
             out[key] = f"{d.normalize():f}"
         elif key == "paused":
             out[key] = bool(value)
     return out
+
+
+def check_risk(budget: Decimal, stop_loss: Decimal, leverage: Decimal, cash: Decimal) -> None:
+    """손절에 걸렸을 때 잃는 돈(금액 × 레버리지 × 손절)이 처음 현금의 1%를 넘으면 거절한다"""
+    loss = budget * leverage * stop_loss
+    if loss > cash * RISK_PER_TRADE:
+        raise RuleError(f"손절에 걸리면 한 번에 {loss.normalize():f}를 잃어 상한(처음 현금 {cash.normalize():f}의 1%)을 넘어요. "
+                        "금액이나 손절 폭을 줄여 주세요.")
 
 
 def save(account: str, values: dict, reason: str, now: datetime) -> dict:

@@ -45,14 +45,21 @@ class RulesTest(unittest.TestCase):
             with self.subTest(account=account, values=values), self.assertRaises(rules.RuleError):
                 rules.clean(account, values, ladder, Decimal(500))
 
+    def test_one_trade_loss_is_capped_at_one_percent_of_starting_cash(self):
+        rules.check_risk(Decimal(100), Decimal("0.03"), Decimal(3), Decimal(1000))  # 9 USDT
+        with self.assertRaises(rules.RuleError):
+            rules.check_risk(Decimal(100), Decimal("0.03"), Decimal(5), Decimal(1000))  # 15 USDT
+
     def test_mcp_set_get_clear(self):
         account = "trade-state-binance-spot-1h.json"
         with self.assertRaisesRegex(mcp.ToolError, "reason"):
             self.tools.rules("set", account, window=7)
         with self.assertRaisesRegex(mcp.ToolError, "실계좌"):
             self.tools.rules("set", "trade-live-binance-spot-1m.json", "x", window=7)
-        with self.assertRaisesRegex(mcp.ToolError, "절반"):
-            self.tools.rules("set", account, "크게", budget="900")
+        with self.assertRaisesRegex(mcp.ToolError, "줄이기만"):
+            self.tools.rules("set", account, "크게", budget="150")  # 봇 기본 100 USDT보다 크게는 못 한다
+        with self.assertRaisesRegex(mcp.ToolError, "1%"):
+            self.tools.rules("set", account, "넓게", stop_loss="0.2")  # 100 × 20% = 20 > 1000의 1%
         got = self.tools.rules("set", account, "추세가 느려서 길게", window=7, coins="BTC,ETH")
         self.assertEqual((got["chosen"]["window"], got["chosen"]["coins"]), (7, "BTC,ETH"))
         self.tools.rules("set", account, "변동성이 커서", stop_loss="0.05")  # 앞 값은 남고 합쳐진다

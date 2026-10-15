@@ -115,7 +115,8 @@ class TradeBotTools:
              "description": "모의 계좌마다 봇이 따를 기준(코인·이동평균 봉 수·손절·한 번 금액·멈춤)을 봅니다(get), 바꿉니다(set), "
                             "jobs.conf대로 되돌립니다(clear). 판단은 이 대화의 AI가 하고, 주문은 봇이 5분마다 이 기준과 상한 안에서 냅니다. "
                             "다음 바퀴부터 적용되고 devlog 자동매매 화면에 '기준을 정한 곳'으로 보입니다. 실계좌(trade-live-…)는 바꾸지 않습니다. "
-                            "세 겹 거름망 계좌(trade-state-ladder-…)는 코인과 멈춤만 됩니다.",
+                            "세 겹 거름망 계좌(trade-state-ladder-…)는 코인과 멈춤만 됩니다. 손절에 걸렸을 때 잃는 돈(금액 × 레버리지 × 손절)이 "
+                            "처음 현금의 1%를 넘는 값은 거절합니다.",
              "inputSchema": {"type": "object", "properties": {
                  "action": {"type": "string", "enum": ["get", "set", "clear"], "default": "get"},
                  "account": {"type": "string", "description": "모의 계좌 상태 파일 이름, 예: trade-state-binance-spot-1h.json"},
@@ -123,7 +124,7 @@ class TradeBotTools:
                  "window": {"type": "integer", "minimum": rules.WINDOW[0], "maximum": rules.WINDOW[1],
                             "description": "이동평균에 쓰는 봉 수"},
                  "stop_loss": {"type": "string", "description": "손절 비율, 0.005~0.2 (0.03 = -3%)"},
-                 "budget": {"type": "string", "description": "한 번 들어갈 금액(계좌 통화, 선물은 증거금). 처음 모의 현금의 절반까지"},
+                 "budget": {"type": "string", "description": "한 번 들어갈 금액(계좌 통화, 선물은 증거금). 봇 기본값 이하로 줄이기만 됩니다"},
                  "paused": {"type": "boolean", "description": "true면 이 계좌는 새로 사고팔지 않고 건너뜁니다"},
                  "reason": {"type": "string", "description": "왜 이렇게 정했는지 한 줄. set에 꼭 넣습니다"}},
                  "additionalProperties": False},
@@ -341,7 +342,8 @@ class TradeBotTools:
     # ---- 매매 기준 (규칙형: 판단은 대화의 AI, 주문은 봇 코드)
     def rules(self, action: str = "get", account: str = "", reason: str = "", **values) -> dict:
         limits = {"coins": f"1~{rules.MAX_COINS}개", "window": f"{rules.WINDOW[0]}~{rules.WINDOW[1]}봉",
-                  "stop_loss": f"{rules.STOP_LOSS[0]}~{rules.STOP_LOSS[1]}", "budget": "처음 모의 현금의 절반까지"}
+                  "stop_loss": f"{rules.STOP_LOSS[0]}~{rules.STOP_LOSS[1]}", "budget": "봇 기본값 이하(줄이기만)",
+                  "한 번 손실": "금액 × 레버리지 × 손절 ≤ 처음 현금의 1%", "레버리지": "대화로 바꾸지 않음"}
         if action == "get":
             try:
                 applied = json.loads((self.root / report.OUTBOX).read_text(encoding="utf-8")).get("rules", {})
@@ -361,8 +363,13 @@ class TradeBotTools:
             raise ToolError("reason에 왜 이렇게 정했는지 한 줄을 넣어 주세요. 자동매매 화면에 남아요.")
         data = json.loads(path.read_text(encoding="utf-8"))
         ex = self._exchange(str(data.get("exchange", "")).lower(), data.get("market", "spot"))
+        ladder = account.startswith("trade-state-ladder-")
         try:
-            cleaned = rules.clean(account, values, account.startswith("trade-state-ladder-"), ex.default_cash / 2)
+            cleaned = rules.clean(account, values, ladder, ex.default_budget)
+            if not ladder:  # 이미 정한 값과 합쳐 한 번 손실 1% 상한을 본다
+                merged = {**rules.for_account(account), **cleaned}
+                rules.check_risk(Decimal(merged.get("budget") or ex.default_budget), Decimal(merged.get("stop_loss") or "0.03"),
+                                 Decimal(data.get("leverage", "1")), ex.default_cash)
         except rules.RuleError as e:
             raise ToolError(str(e)) from e
         if not cleaned:

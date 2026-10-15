@@ -212,7 +212,11 @@ def _chosen_rules(args: argparse.Namespace, ex: Exchange) -> dict:
     if not row:
         return {}
     try:
-        rules.clean(account, {k: row.get(k) for k in rules.FIELDS if k in row}, args.rule == "ladder", ex.default_cash / 2)
+        rules.clean(account, {k: row.get(k) for k in rules.FIELDS if k in row}, args.rule == "ladder", ex.default_budget)
+        if args.rule != "ladder":
+            leverage = Decimal(args.leverage) if ex.market == "futures" else Decimal(1)
+            rules.check_risk(Decimal(row.get("budget") or args.budget or ex.default_budget),
+                             Decimal(row.get("stop_loss") or args.stop_loss), leverage, Decimal(args.cash) if args.cash else ex.default_cash)
     except rules.RuleError as e:
         print(f"{account}: 대화에서 정한 기준을 쓰지 않아요 ({e}). jobs.conf대로 돌아요.", file=sys.stderr)
         return {}

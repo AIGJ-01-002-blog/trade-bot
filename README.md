@@ -164,7 +164,7 @@ Claude Desktop·Claude Code·Codex CLI에 봇을 MCP 서버로 붙이면 대화�
 | `trade_bot_accounts` | 계좌마다 현금, 보유 종목·포지션, 지금 가격 기준 평가 손익, AI 켜짐 여부와 이번 달 AI 비용 |
 | `trade_bot_order` | 시장가 주문. 현물 BUY·SELL, 선물 LONG·SHORT·CLOSE. **기본은 모의 계좌만** |
 | `trade_bot_ai` | AI 판단 켜기·끄기(`trade-control.json`). `jobs.conf`의 `--ai`보다 먼저 적용돼요 |
-| `trade_bot_rules` | 모의 계좌마다 매매 기준(코인·이동평균 봉 수·손절·한 번 금액·멈춤)을 정해요(`trade-rules.json`). 판단은 대화의 AI가, 주문은 봇이 다음 바퀴부터 이 기준과 상한 안에서 내요. 실계좌는 바꾸지 않고, 거름망 계좌는 코인과 멈춤만 돼요 |
+| `trade_bot_rules` | 모의 계좌마다 매매 기준(코인·이동평균 봉 수·손절·한 번 금액·멈춤)을 정해요(`trade-rules.json`). 판단은 대화의 AI가, 주문은 봇이 다음 바퀴부터 이 기준과 상한 안에서 내요. 금액은 기본값보다 줄이기만 되고, 손절 한 번에 잃는 돈은 처음 현금의 1%까지예요. 실계좌는 바꾸지 않고, 거름망 계좌는 코인과 멈춤만 돼요 |
 
 - 도구 이름은 `trade_bot_`으로 시작해요. 매매 일지 조회·기록은 devlog MCP(`record_trade` 등)가 맡고, 이 서버는 봇 계좌만 다뤄요. 대화로 낸 체결은 봇과 같은 길로 기록되고 전략 이름이 `mcp-manual`, 이유가 `[대화 주문] …`이에요.
 - 서버는 기본으로 체결을 devlog에 보내지 않아요. 보내려면 `--record`를 주고 서버 환경 변수에 `DEVLOG_TOKEN`을 넣어요(설정 파일에 토큰을 적지 말고 키체인에서 읽어 넘겨요).
