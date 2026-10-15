@@ -116,6 +116,11 @@ touch trade-live.on                                                             
 ```
 
 - 손절 -2%, 익절 +4%(손익비 1:2)이고, 그날 실현 수익이 계좌의 2%(약 200원)에 닿으면 그날은 새로 사지 않아요. 들고 있는 것의 손절·익절·정리는 그대로 나가요.
+- 사고팔 때마다 디스코드로 알림을 받으려면 채널(실거래·모의)마다 웹후크를 만들고 주소를 키체인에 넣어요. 주소는 채팅·git·파일에 쓰지 않아요.
+  ```bash
+  security add-generic-password -U -a "$USER" -s devlog-trade-bot-discord-live -w    # 실거래 채널 웹후크 주소
+  security add-generic-password -U -a "$USER" -s devlog-trade-bot-discord-paper -w   # 모의 채널 웹후크 주소
+  ```
 - 끄기: `rm trade-live.on` 하면 다음 바퀴부터 실거래 줄은 주문 없이 멈춰요(종료 코드 2). 들고 있는 코인은 업비트 앱에서 직접 팔아요.
 - 손실 상한에 닿으면 새 매수를 멈추고 기록에 이유가 남아요. 매도는 계속 나가요.
 
