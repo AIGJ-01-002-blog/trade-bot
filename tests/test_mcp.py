@@ -34,6 +34,18 @@ class McpTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.tools = mcp.TradeBotTools(self.root, exchange_for=fake_exchange)
 
+    def test_accounts_label_testnet_and_skip_ladder_sidecars(self):
+        self.spot()
+        (self.root / "trade-state-binance-spot-1h.ladder.json").write_text("{}", encoding="utf-8")
+        for name, testnet in (("trade-live-binance-spot-1m.json", True), ("trade-live-upbit-spot-1m.json", None)):
+            path = self.root / self.spot(name)
+            data = json.loads(path.read_text(encoding="utf-8"))
+            data.update(mode="LIVE", **({} if testnet is None else {"testnet": testnet}))
+            path.write_text(json.dumps(data), encoding="utf-8")
+        got = {a["account"]: a.get("mode", a.get("error")) for a in self.tools.accounts(with_prices=False)["accounts"]}
+        self.assertEqual(got, {"trade-state-binance-spot-1h.json": "PAPER", "trade-live-binance-spot-1m.json": "TESTNET",
+                               "trade-live-upbit-spot-1m.json": "LIVE"})
+
     def spot(self, name="trade-state-binance-spot-1h.json"):
         PaperBroker(cash=Decimal(1000), fee_rate=Decimal("0.001"), currency="USDT", exchange="BINANCE").save(self.root / name)
         return name
