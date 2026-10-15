@@ -18,7 +18,7 @@ from decimal import ROUND_FLOOR, Decimal
 from pathlib import Path
 from typing import Callable
 
-from . import __version__, ai, ladder, live, report, rules
+from . import __version__, ai, ladder, live, notify, report, rules
 from .broker import Fill, PaperBroker, state_lock
 from .exchanges import COINS, EXCHANGES, INTERVALS, Exchange, ExchangeError
 from .futures import FuturesBroker
@@ -50,6 +50,7 @@ class Session:
 
     day, day_pnl = "", Decimal(0)
     profit_stop = Decimal(0)  # 하루 실현 손익이 이 금액 이상이면 그날 새 진입을 쉰다(0이면 끔)
+    plan = notify.Plan()  # 디스코드 체결 알림에 보일 손절·익절. 코인 이동평균 모드가 채운다
 
     def __init__(self, args: argparse.Namespace, new_broker: Callable[[], PaperBroker | FuturesBroker] | None,
                  broker: PaperBroker | FuturesBroker | None = None):
@@ -95,6 +96,16 @@ class Session:
                 self.day_pnl += fill.realized_pnl
             # devlog 자동매매 화면(/trade)용. 실계좌 체결은 report가 빼고, 매매 일지 보내기와 따로 다음 알림 때 나간다
             report.add_event(self.state.parent, report.fill_event(self.state.name, self.broker.market, fill))
+            self._notify(fill)
+
+    def _notify(self, fill: Fill) -> None:
+        """사고팔 때마다 디스코드로. 실거래와 모의(테스트넷 포함)는 다른 채널이다"""
+        mode = getattr(self.broker, "mode", "PAPER")
+        trader = getattr(self.broker, "trader", None)
+        if mode == "LIVE" and getattr(trader, "testnet", False):
+            mode = "TESTNET"
+        notify.send(mode, notify.text(mode, self.state.name, self.broker.market, fill, self.plan, self.broker.describe(),
+                                      self.day_pnl if fill.realized_pnl is not None else None))
 
     def _day(self, at: str) -> None:
         day = datetime.fromisoformat(at.replace("Z", "+00:00")).astimezone(KST).date().isoformat()
@@ -292,6 +303,7 @@ def _coin_session(args: argparse.Namespace, ex: Exchange, symbols: list[str], fe
         return 0 if ok else 1
     budget = Decimal(args.budget) if args.budget else ex.default_budget
     take_profit = Decimal(args.take_profit or 0)
+    s.plan = notify.Plan(Decimal(args.stop_loss), take_profit)
     rule = MovingAverageCross(window=args.window, stop_loss=Decimal(args.stop_loss), period=f"개 {args.interval}봉",
                               take_profit=take_profit)
     if args.daily_profit_stop:

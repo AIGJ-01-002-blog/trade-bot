@@ -19,6 +19,11 @@ KEY="$(security find-generic-password -a "$USER" -s devlog-trade-bot-upbit-acces
 [ -n "$KEY" ] && export UPBIT_ACCESS_KEY="$KEY"
 KEY="$(security find-generic-password -a "$USER" -s devlog-trade-bot-upbit-secret -w 2>/dev/null || true)"
 [ -n "$KEY" ] && export UPBIT_SECRET_KEY="$KEY"
+# 사고팔 때 디스코드 알림: 채널 웹후크 주소도 키처럼 키체인(devlog-trade-bot-discord-live·-paper)에서 읽는다
+KEY="$(security find-generic-password -a "$USER" -s devlog-trade-bot-discord-live -w 2>/dev/null || true)"
+[ -n "$KEY" ] && export DISCORD_WEBHOOK_LIVE="$KEY"
+KEY="$(security find-generic-password -a "$USER" -s devlog-trade-bot-discord-paper -w 2>/dev/null || true)"
+[ -n "$KEY" ] && export DISCORD_WEBHOOK_PAPER="$KEY"
 unset KEY
 # 실거래소 주문은 이 폴더에 trade-live.on 파일이 있을 때만 켠다(DEVLOG_TRADE_LIVE=1). 지우면 다음 바퀴부터 꺼진다.
 # jobs.conf 줄의 --live와 둘 다 있어야 주문이 나간다.

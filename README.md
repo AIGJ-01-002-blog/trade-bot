@@ -77,6 +77,13 @@ python3 -m devlog_trade coin --exchange binance --coins BTC,ETH --interval 4h --
 - 알리지 못해도(devlog에 아직 도구가 없거나 네트워크가 끊겨도) 매매와 종료 코드는 그대로예요. 체결·판단은 봇 폴더의 `trade-bot-report.json`에 모아 두었다가 다음 바퀴에 다시 보내요(한 번에 200건).
 - 끄려면 `jobs --no-report`나 환경 변수 `TRADE_REPORT=off`.
 
+### 사고팔 때 디스코드 알림
+
+체결이 날 때마다 디스코드 채널로 가격·수량·금액, 진입이면 목표가·손절가, 정리면 이번 손익과 오늘 손익, 잔액을 보내요. 실거래는 `DISCORD_WEBHOOK_LIVE`, 모의와 테스트넷은 `DISCORD_WEBHOOK_PAPER` 채널로 나눠요.
+
+- 채널 편집 › 연동 › 웹후크에서 주소를 만들어요. 주소를 아는 사람은 누구나 그 채널에 글을 쓸 수 있어서 키처럼 다뤄요. 맥은 키체인(`devlog-trade-bot-discord-live`·`devlog-trade-bot-discord-paper`)에 넣으면 `macos/run-bot.sh`가 읽어요.
+- 주소가 없으면 보내지 않고, 보내지 못해도 매매와 종료 코드는 그대로예요.
+
 ### 맥북 덮개를 닫고 돌리기
 
 1. 토큰을 키체인에 넣어요(파일에 적지 않아요).
