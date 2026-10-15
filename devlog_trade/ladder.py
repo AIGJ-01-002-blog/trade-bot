@@ -337,19 +337,20 @@ class Ladder:
         return max(p.risk_floor, base * mult)
 
     # 정리
-    def _exit(self, symbol: str, leg: Leg, frac: float, price: float, reason: str, at: str) -> None:
-        """처음 수량 중 frac만큼(1이면 남은 것 전부) price에 정리한다. 다 정리되면 R을 기록한다"""
+    def _exit(self, symbol: str, leg: Leg, frac: float, price: float, reason: str, at: str) -> bool:
+        """처음 수량 중 frac만큼(1이면 남은 것 전부) price에 정리한다. 다 정리되면 R을 기록한다.
+        정리하지 못했으면(수량이 0으로 내림돼 체결이 없으면) False"""
         last = frac >= 1
         if leg.shadow:  # 그림자: 돈은 움직이지 않고 진입가 대비 비율로만 손익을 쌓는다
             part = self._left(leg) if last else frac
             leg.pnl += part * (leg.side * (price - leg.entry) / leg.entry - float(self.b.fee_rate))
             if last:
                 self._close(symbol, leg, at)
-            return
+            return True
         held = self.b.positions.get(symbol)
         if held is None:  # 손으로 정리했거나 MCP 주문으로 없어진 경우
             self._close(symbol, leg, at)
-            return
+            return True
         qty = held.quantity if last else min(held.quantity, Decimal(str(leg.qty0 * frac)).quantize(COIN_STEP, rounding=ROUND_FLOOR))
         px = Decimal(str(price))
         if self.futures:
@@ -361,6 +362,7 @@ class Ladder:
             leg.pnl += float(fill.realized_pnl or 0)
         if symbol not in self.b.positions:
             self._close(symbol, leg, at)
+        return fill is not None
 
     @staticmethod
     def _left(leg: Leg) -> float:
@@ -386,11 +388,11 @@ class Ladder:
             return
         reach = (lambda lvl: hi >= lvl) if s > 0 else (lambda lvl: lo <= lvl)
         if not leg.tp1_done and reach(leg.tp1):
-            self._exit(symbol, leg, 1 / 3, leg.tp1, "+1R 1/3 익절, 손절을 본전으로", at)
-            leg.tp1_done, leg.stop = True, leg.entry
+            if self._exit(symbol, leg, 1 / 3, leg.tp1, "+1R 1/3 익절, 손절을 본전으로", at):
+                leg.tp1_done, leg.stop = True, leg.entry
         elif leg.tp1_done and not leg.tp2_done and reach(leg.tp2):
-            self._exit(symbol, leg, 1 / 3, leg.tp2, "+2R 1/3 익절", at)
-            leg.tp2_done = True
+            if self._exit(symbol, leg, 1 / 3, leg.tp2, "+2R 1/3 익절", at):
+                leg.tp2_done = True
         if symbol not in self.book.legs:
             return
         if v.regime != s:

@@ -97,6 +97,14 @@ class LadderSpotTest(unittest.TestCase):
         self.assertGreater(r, 0)  # 1/3을 +1R에 팔았으니 수수료를 빼도 플러스
         self.assertLess(r, 1 / 3)
 
+    def test_unfilled_take_profit_keeps_the_original_stop(self):
+        self.lad.enter("BTCUSDT", "비트코인", candle(0, 100, 100, 100, 100), up_view(0.02), "t")
+        with mock.patch.object(self.b, "sell", return_value=None):  # 1/3 수량이 0으로 내림돼 체결이 없는 경우
+            self.lad.manage("BTCUSDT", candle(1, 100, 102.5, 100.5, 102), up_view(), "t1")
+        leg = self.lad.book.legs["BTCUSDT"]
+        self.assertFalse(leg.tp1_done)
+        self.assertEqual(leg.stop, 98)
+
     def test_stop_gap_fills_at_open(self):
         self.lad.enter("BTCUSDT", "비트코인", candle(0, 100, 100, 100, 100), up_view(0.02), "t")
         self.lad.manage("BTCUSDT", candle(1, 95, 96, 94, 95), up_view(), "t1")

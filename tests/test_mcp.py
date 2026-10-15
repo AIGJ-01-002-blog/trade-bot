@@ -59,6 +59,14 @@ class McpTest(unittest.TestCase):
         self.assertEqual((r["symbol"], r["last_close"], r["sma5"]), ("BTCUSDT", "97", "101.4"))
         self.assertEqual(len(r["closes"]), 5)
 
+    def test_prices_without_closed_candles_is_a_tool_error(self):
+        empty = mock.Mock(code="BINANCE", market="spot", currency="USDT")
+        empty.fetch_candles.return_value = []
+        empty.symbol_for.return_value = "NEWUSDT"
+        tools = mcp.TradeBotTools(self.root, exchange_for=lambda e, m: empty)
+        with self.assertRaisesRegex(mcp.ToolError, "봉이 아직 없어요"):
+            tools.prices("new")
+
     def test_paper_buy_then_sell_saves_state_and_labels_the_journal(self):
         name = self.spot()
         r = self.tools.order(name, "BTC", "BUY", "지지선 반등", amount="100")

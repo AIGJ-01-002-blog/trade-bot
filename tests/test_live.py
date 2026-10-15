@@ -137,6 +137,14 @@ class KeyCheckTest(unittest.TestCase):
         fx.routes[("GET", "/v1/withdraws/chance")] = lambda q: (401, {"error": {"name": "out_of_scope", "message": "권한 없음"}})
         UpbitTrader("a", "b", send=fx).check_key()
 
+    def test_upbit_key_check_fails_closed_when_upbit_does_not_say_out_of_scope(self):
+        fx = FakeExchange()
+        for status, body in [(429, {"error": {"name": "too_many_requests"}}), (500, "oops"),
+                             (401, {"error": {"name": "jwt_verification"}})]:
+            fx.routes[("GET", "/v1/withdraws/chance")] = lambda q, s=status, b=body: (s, b)
+            with self.assertRaisesRegex(LiveRefused, "확인하지 못했어요"):
+                UpbitTrader("a", "b", send=fx).check_key()
+
     def test_state_file_of_paper_account_is_refused(self):
         fx = FakeExchange()
         binance_spot(fx)
@@ -234,6 +242,16 @@ class LiveBrokerTest(unittest.TestCase):
         # 한국 시간 자정(UTC 15:00)이 지나면 다시 산다
         self.assertIsNotNone(b.buy("BTCUSDT", "비트코인", Decimal("0.001"), Decimal(40000), "", "2026-10-14T15:30:00Z"))
         self.assertEqual(b.halted, "")
+
+    def test_one_big_loss_that_also_hits_the_daily_cap_still_needs_resume(self):
+        fx = FakeExchange()
+        binance_spot(fx)
+        b = live_broker(fx, Limits(Decimal(100), Decimal(20), Decimal(15)))
+        b.buy("BTCUSDT", "비트코인", Decimal("0.002"), Decimal(50000), "", AT)
+        b.sell("BTCUSDT", "비트코인", Decimal("0.002"), Decimal(40000), "", "2026-10-14T11:00:00+09:00")  # -20.1
+        self.assertIn("한 번 청산 손실", b.halted)
+        # 다음 날이 돼도 하루 멈춤처럼 저절로 풀리지 않는다
+        self.assertIsNone(b.buy("BTCUSDT", "비트코인", Decimal("0.001"), Decimal(40000), "", "2026-10-15T15:30:00Z"))
 
     def test_rejected_order_returns_none(self):
         fx = FakeExchange()
@@ -336,6 +354,21 @@ class FuturesTest(unittest.TestCase):
         self.assertNotIn("BTCUSDT", b.positions)
         self.assertEqual(close.executed_at, "2026-10-14T19:00:00+09:00")  # 봉 시각이 아니라 거래소 체결 시각
 
+    def test_close_and_reverse_on_the_same_bar_send_two_orders(self):
+        fx = self.fx()
+        b = self.broker(fx, amt="0.001")
+        b.open("BTCUSDT", "비트코인 선물", "LONG", Decimal("0.001"), Decimal(60000), "", AT)
+        bar = "2026-10-14T11:00:00+09:00"
+        b.close("BTCUSDT", Decimal(60000), "", bar)  # 정리 SELL
+        fx.routes[("GET", "/fapi/v2/positionRisk")] = lambda q: (200, [{"symbol": "BTCUSDT", "positionAmt": "-0.001"}])
+        short = b.open("BTCUSDT", "비트코인 선물", "SHORT", Decimal("0.001"), Decimal(60000), "", bar)  # 같은 봉 숏 진입 SELL
+        ids = [c[3]["newClientOrderId"] for c in fx.calls if c[0] == "POST" and c[2] == "/fapi/v1/order"]
+        self.assertEqual(len(ids), 3)
+        self.assertEqual(len(set(ids)), 3)
+        self.assertEqual(b.positions["BTCUSDT"].side, "SHORT")
+        self.assertIsNone(fx.orders[ids[2]].get("reduceOnly"))  # 진입이 정리 주문으로 뒤바뀌지 않았다
+        self.assertIsNotNone(short)
+
     def test_leverage_is_set_once_per_symbol(self):
         fx = self.fx()
         b = self.broker(fx, amt="0.001")
@@ -351,6 +384,9 @@ class FuturesTest(unittest.TestCase):
         self.assertIsNone(b.close("BTCUSDT", Decimal(50000), "", AT))
         self.assertNotIn("BTCUSDT", b.positions)
         self.assertFalse(any(c[0] == "POST" for c in fx.calls))
+        # 강제 청산으로 보고 증거금(20)만큼 잃은 것으로 센다 → 한 번 손실 상한 20에 닿아 새 진입을 멈춘다
+        self.assertIn("한 번 청산 손실 20", b.halted)
+        self.assertEqual(b.day_pnl, Decimal(-20))
 
     def test_futures_state_survives_and_keeps_last_seen(self):
         fx = self.fx()
