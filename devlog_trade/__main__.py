@@ -18,7 +18,7 @@ from decimal import ROUND_FLOOR, Decimal
 from pathlib import Path
 from typing import Callable
 
-from . import __version__, ai, ladder, live, report
+from . import __version__, ai, ladder, live, report, rules
 from .broker import Fill, PaperBroker, state_lock
 from .exchanges import COINS, EXCHANGES, INTERVALS, Exchange, ExchangeError
 from .futures import FuturesBroker
@@ -173,6 +173,14 @@ def coin(args: argparse.Namespace) -> int:
         print(f"{args.exchange}에는 {args.market} 시세가 없어요. 선물은 바이낸스만 돼요.", file=sys.stderr)
         return 2
     ex: Exchange = adapter()
+    if args.state is None:
+        args.state = live.live_state_name(args.exchange, ex.market, args.interval) if args.live else \
+            f"trade-state-{'ladder-' if args.rule == 'ladder' else ''}{args.exchange}-{ex.market}-{args.interval}.json"
+    chosen = {} if args.live else _chosen_rules(args, ex)
+    args.chosen_by = f"대화(AI) · {chosen.get('reason') or '이유 없음'}"[:200] if chosen else ""
+    if chosen.get("paused"):
+        print(f"{Path(args.state).name}: 대화에서 멈춘 계좌라 이번 바퀴는 건너뛰어요 ({chosen.get('reason') or '이유 없음'}).")
+        return 0
     symbols = [s.strip().upper() for s in args.symbol.split(",")] if args.symbol else \
         [ex.symbol_for(c) for c in (args.coins.split(",") if args.coins else COINS) if c.strip()]
     fee_rate = Decimal(args.fee_rate) if args.fee_rate is not None else ex.fee_rate
@@ -189,15 +197,30 @@ def coin(args: argparse.Namespace) -> int:
     if args.live and args.dry_run and not args.testnet:  # 테스트넷은 돈이 오가지 않아 화면에만 볼 수 있다
         print("실거래소 --live는 --dry-run과 함께 쓸 수 없어요. 실계좌 체결은 devlog에 남겨야 해요.", file=sys.stderr)
         return 2
-    if args.state is None:
-        args.state = live.live_state_name(args.exchange, ex.market, args.interval) if args.live else \
-            f"trade-state-{'ladder-' if args.rule == 'ladder' else ''}{args.exchange}-{ex.market}-{args.interval}.json"
     try:
         with state_lock(Path(args.state)):  # MCP 주문(devlog_trade.mcp)과 같은 상태 파일을 번갈아 쓴다
             return _coin_session(args, ex, symbols, fee_rate, cash, leverage)
     except TimeoutError as e:
         print(e, file=sys.stderr)
         return 1
+
+
+def _chosen_rules(args: argparse.Namespace, ex: Exchange) -> dict:
+    """대화에서 정한 계좌 기준(trade-rules.json)을 덮어 쓴다. 상한을 넘는 값이면 무시하고 jobs.conf대로 돈다"""
+    account = Path(args.state).name
+    row = rules.for_account(account)
+    if not row:
+        return {}
+    try:
+        rules.clean(account, {k: row.get(k) for k in rules.FIELDS if k in row}, args.rule == "ladder", ex.default_budget)
+        if args.rule != "ladder":
+            leverage = Decimal(args.leverage) if ex.market == "futures" else Decimal(1)
+            rules.check_risk(Decimal(row.get("budget") or args.budget or ex.default_budget),
+                             Decimal(row.get("stop_loss") or args.stop_loss), leverage, Decimal(args.cash) if args.cash else ex.default_cash)
+    except rules.RuleError as e:
+        print(f"{account}: 대화에서 정한 기준을 쓰지 않아요 ({e}). jobs.conf대로 돌아요.", file=sys.stderr)
+        return {}
+    return rules.apply(args, account)
 
 
 def _coin_session(args: argparse.Namespace, ex: Exchange, symbols: list[str], fee_rate: Decimal, cash: Decimal,
@@ -226,7 +249,8 @@ def _coin_session(args: argparse.Namespace, ex: Exchange, symbols: list[str], fe
             args.strategy = ladder.VERSION
         report.set_rules(s.state.parent, s.state.name, {
             "전략": f"{ladder.VERSION} 세 겹 거름망", "봉": "1h", "코인": ", ".join(symbols), "레버리지 상한": f"{MAX_LEVERAGE}배",
-            "모드": "모의(--dry-run)" if args.dry_run else "모의"})
+            "모드": "모의(--dry-run)" if args.dry_run else "모의",
+            **({"기준을 정한 곳": args.chosen_by} if getattr(args, "chosen_by", "") else {})})
         got, seen = ladder.run(s, ex, symbols, args.limit, int(MAX_LEVERAGE),
                                lambda k: k.close_time.astimezone(KST).isoformat(timespec="seconds"))
         ok = s.send_all() and got and ok
@@ -250,12 +274,14 @@ def _coin_session(args: argparse.Namespace, ex: Exchange, symbols: list[str], fe
         s.save()
         return 2
     model = strategy.client.label if isinstance(strategy, ai.AiStrategy) else ""
-    rules = {"전략": f"{args.window}봉 이동평균 교차", "봉": args.interval, "코인": ", ".join(symbols),
+    shown = {"전략": f"{args.window}봉 이동평균 교차", "봉": args.interval, "코인": ", ".join(symbols),
              "한 번 금액": _amount(budget, ex.currency), "손절": f"{(Decimal(args.stop_loss) * 100).normalize():f}%",
              "AI 판단": f"켜짐 ({model})" if model else "꺼짐", "모드": "모의(--dry-run)" if args.dry_run else "모의"}
     if ex.market == "futures":
-        rules["레버리지"] = f"{b.leverage:f}배"
-    report.set_rules(s.state.parent, s.state.name, rules, model)
+        shown["레버리지"] = f"{b.leverage:f}배"
+    if getattr(args, "chosen_by", ""):
+        shown["기준을 정한 곳"] = args.chosen_by
+    report.set_rules(s.state.parent, s.state.name, shown, model)
     seen = []
     for symbol in symbols:
         try:
