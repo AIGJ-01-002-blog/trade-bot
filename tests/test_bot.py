@@ -5,6 +5,8 @@ import json
 import tempfile
 import threading
 import unittest
+import urllib.error
+import urllib.parse
 from contextlib import redirect_stderr, redirect_stdout
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -106,6 +108,39 @@ class ExchangeTest(unittest.TestCase):
         self.assertIn("api.upbit.com/v1/candles/minutes/60?market=KRW-BTC&count=200", urls[0])
         self.assertEqual([c.close for c in candles][:3], [Decimal(100), Decimal(99), Decimal(98)])
         self.assertEqual(ex.coin_name("KRW-BTC"), "비트코인")
+
+    def test_upbit_pages_past_200_with_to(self):
+        rows = upbit_rows(list(range(1, 301)), START)  # 300개, 최신이 먼저
+        urls = []
+
+        def fetch(url):
+            urls.append(url)
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+            older = [r for r in rows if "to" not in q or r["candle_date_time_utc"] + "Z" < q["to"][0]]
+            return older[: int(q["count"][0])]
+
+        candles = Upbit(fetch=fetch).fetch_candles("KRW-BTC", "1h", 250, now=START + timedelta(days=30))
+        self.assertEqual(len(urls), 2)
+        self.assertIn("count=50", urls[1])
+        self.assertIn("to=", urls[1])
+        self.assertEqual(len(candles), 250)
+        self.assertEqual(candles[-1].close, Decimal(300))
+        self.assertEqual(candles[0].close, Decimal(51))
+
+    def test_upbit_waits_and_retries_on_429(self):
+        calls = []
+
+        def fetch(url):
+            calls.append(url)
+            if len(calls) == 1:
+                raise urllib.error.HTTPError(url, 429, "Too Many Requests", {}, None)
+            return upbit_rows(CLOSES, START)
+
+        with mock.patch("devlog_trade.exchanges.http_get_json", fetch), mock.patch("devlog_trade.exchanges.time.sleep") as sleep:
+            candles = Upbit(fetch=fetch).fetch_candles("KRW-BTC", "1h", 10, now=START + timedelta(days=1))
+        self.assertEqual(len(calls), 2)
+        self.assertIn(1.0, [c.args[0] for c in sleep.call_args_list])
+        self.assertEqual(len(candles), len(CLOSES))
 
     def test_region_block_is_explained(self):
         import urllib.error
