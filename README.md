@@ -68,6 +68,15 @@ python3 -m devlog_trade coin --exchange binance --coins BTC,ETH --interval 4h --
 
 `jobs.conf`에 줄마다 `coin` 옵션을 적고 `python3 -m devlog_trade jobs jobs.conf`로 차례로 돌려요. `--every 300`을 붙이면 5분마다 계속 돌아요. 맥 launchd와 Docker가 이 파일을 써요. 처음 받은 파일은 모두 `--dry-run`이라, 화면을 보고 괜찮으면 지워 주세요.
 
+### devlog 자동매매 화면에 알리기 (devlog.life/trade)
+
+`jobs`는 한 바퀴를 다 돈 뒤 devlog MCP 도구 `report_trade_bot`을 한 번 불러요. 모의 계좌의 현금·포지션·평가 손익, 줄마다 적용 중인 규칙(전략·봉·코인·한 번 금액·손절·AI 판단), 새 모의 체결과 이유, AI 진입 판단(허락·막음), 지난 날의 하루 요약이 devlog **내 메뉴 › 자동매매 (모의)**에 보여요.
+
+- 매매 일지와 다른 전용 표에 남아 공개 글·일지에 섞이지 않아요. 그래서 `--dry-run` 계좌도 보내요. 실계좌(`trade-live-…`)는 보내지 않아요.
+- 토큰은 매매 일지와 같은 `DEVLOG_TOKEN`(맥은 키체인)이에요. 없으면 알리지 않고 넘어가요. 주소는 `DEVLOG_SERVER`(기본 `https://devlog.life`).
+- 알리지 못해도(devlog에 아직 도구가 없거나 네트워크가 끊겨도) 매매와 종료 코드는 그대로예요. 체결·판단은 봇 폴더의 `trade-bot-report.json`에 모아 두었다가 다음 바퀴에 다시 보내요(한 번에 200건).
+- 끄려면 `jobs --no-report`나 환경 변수 `TRADE_REPORT=off`.
+
 ### 맥북 덮개를 닫고 돌리기
 
 1. 토큰을 키체인에 넣어요(파일에 적지 않아요).
