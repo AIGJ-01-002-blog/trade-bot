@@ -63,7 +63,7 @@ class McpTest(unittest.TestCase):
         self.assertEqual([r["id"] for r in replies], [1, 2, 3])
         self.assertEqual(replies[0]["result"]["protocolVersion"], "2025-06-18")
         names = [t["name"] for t in replies[1]["result"]["tools"]]
-        self.assertEqual(names, ["trade_bot_prices", "trade_bot_accounts", "trade_bot_order", "trade_bot_ai"])
+        self.assertEqual(names, ["trade_bot_prices", "trade_bot_accounts", "trade_bot_order", "trade_bot_ai", "trade_bot_rules"])
         self.assertTrue(replies[2]["result"]["isError"])  # devlog의 record_trade는 이 서버에 없다
 
     def test_prices_give_closes_and_moving_averages(self):

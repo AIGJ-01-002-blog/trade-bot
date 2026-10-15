@@ -14,5 +14,6 @@ secret*.env
 logs/
 trade-*.lock
 trade-control.json
+trade-rules.json*
 research/results/
 trade-bot-report.json*
