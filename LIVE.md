@@ -92,6 +92,32 @@ DEVLOG_TRADE_LIVE=1 python3 -m devlog_trade coin --exchange binance --market fut
 - devlog 매매 일지에는 `mode=LIVE`로 남아 화면에 "실계좌"로 따로 보여요. 실거래소 `--live`는 `--dry-run`과 함께 쓸 수 없어요. 테스트넷은 `--dry-run`을 붙이면 devlog에 보내지 않고 화면에만 보여요.
 - 켜는 조건·상한·키·출금 권한 중 하나라도 맞지 않으면 주문 없이 멈춰요(종료 코드 2).
 
+## 맥 자동 실행으로 업비트 소액 시험 (1만 원, 4주)
+
+민서님이 업비트 현물을 소액으로 4주 실거래해 보기로 했어요(2026-10-15). 전략 성적보다 **실제 주문·체결·기록이 끝까지 도는지** 보는 시험이에요.
+
+- 시드는 1만 원이 맞아요. 업비트는 사고팔 때 모두 최소 5,000원이라, 5,000원만 넣으면 산 뒤 값이 조금만 내려도 팔 수 없어요. 한 번 6,000원으로 사면 16% 넘게 빠지기 전까지는 팔 수 있어요.
+- 봇은 업비트 원화 잔고를 현금으로 봐요. 업비트에 다른 원화가 있으면 아래 상한 안에서 그 돈도 써요.
+- 키는 맥 키체인에만 넣어요. `macos/run-bot.sh`가 실행할 때마다 읽어요.
+
+```bash
+security add-generic-password -a "$USER" -s devlog-trade-bot-upbit-access -w   # 물음에 Access Key 붙여 넣기
+security add-generic-password -a "$USER" -s devlog-trade-bot-upbit-secret -w   # 물음에 Secret Key 붙여 넣기
+UPBIT_ACCESS_KEY="$(security find-generic-password -a "$USER" -s devlog-trade-bot-upbit-access -w)" \
+UPBIT_SECRET_KEY="$(security find-generic-password -a "$USER" -s devlog-trade-bot-upbit-secret -w)" \
+python3 -m devlog_trade.live check --market upbit                              # 주문 없이 키·출금 권한·잔고 확인
+touch trade-live.on                                                             # 실거래 스위치 켜기 (DEVLOG_TRADE_LIVE=1)
+```
+
+`jobs.conf` 맨 아래에 한 줄을 더해요. `--dry-run`이 없어 체결은 devlog 매매 일지에 실계좌로 남아요(키체인 `devlog-trade-bot` 토큰이 있을 때).
+
+```text
+--exchange upbit --market spot --interval 1h --coins BTC,ETH --live --max-order 6000 --max-order-loss 1000 --max-daily-loss 1500
+```
+
+- 끄기: `rm trade-live.on` 하면 다음 바퀴부터 실거래 줄은 주문 없이 멈춰요(종료 코드 2). 들고 있는 코인은 업비트 앱에서 직접 팔아요.
+- 손실 상한에 닿으면 새 매수를 멈추고 기록에 이유가 남아요. 매도는 계속 나가요.
+
 ## 테스트
 
 ```bash

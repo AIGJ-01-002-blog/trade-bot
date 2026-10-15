@@ -13,6 +13,7 @@
 - devlog 자동매매 화면(`devlog.life/trade`, devlog spec 101) 알림: `jobs`가 한 바퀴 뒤 `report_trade_bot`으로 모의 계좌·적용 중인 규칙·새 모의 체결·AI 진입 판단(허락·막음)·지난 날 하루 요약을 보낸다. 실계좌는 빼고, 실패해도 매매와 종료 코드는 그대로이며 사건은 `trade-bot-report.json`에 두었다가 다시 보낸다. `--no-report`·`TRADE_REPORT=off`로 끈다. devlog v2.2.0(PR #297) 이후 운영 서버에서 받는다.
 - 대화 주문(MCP `trade_bot_order`)의 체결도 같은 길로 자동매매 화면에 간다.
 - MCP `trade_bot_rules`(규칙형): 대화하는 AI가 모의 계좌마다 코인·이동평균 봉 수·손절·한 번 금액·멈춤을 정하면 봇이 다음 바퀴부터 `jobs.conf` 대신 그 값으로 돈다. 상한은 코드가 지킨다: 코인 10개, 2~60봉, 손절 0.5~20%, 금액은 봇 기본값 이하로 줄이기만, 손절에 걸렸을 때 잃는 돈(금액 × 레버리지 × 손절)은 처음 현금의 1%까지(세 겹 거름망 복리법 한도). 레버리지는 대화로 바꾸지 않고, 실계좌는 받지 않는다. 자동매매 화면 규칙에 "기준을 정한 곳"과 이유가 붙는다.
+- 맥 자동 실행(`macos/run-bot.sh`)이 업비트 키를 키체인(`devlog-trade-bot-upbit-access`·`-secret`)에서 읽고, 봇 폴더에 `trade-live.on`이 있을 때만 `DEVLOG_TRADE_LIVE=1`을 켠다. 업비트 소액(1만 원) 4주 실거래 시험 방법을 LIVE.md에 적었다.
 
 ### 고침
 - MCP `trade_bot_accounts`가 테스트넷 계좌를 실계좌(LIVE)로 보이던 것: 실계좌 상태 파일에 `testnet`을 남기고 TESTNET으로 보인다. 테스트넷 장부를 실거래소에서(또는 반대로) 다시 쓰려 하면 멈춘다.
