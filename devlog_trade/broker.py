@@ -1,15 +1,18 @@
 """모의 체결 (#243). 실제 주문을 내지 않고, 받은 가격에 바로 체결된 것으로 보고 평균 단가와 실현 손익을 계산한다.
 코인(#255)은 소수 수량을 쓰고, 금액은 계좌 통화(KRW는 원 단위, USDT 등은 소수 8자리)로 맞춘다.
 
-실계좌 주문은 이 예제에 없다. 되돌릴 수 없는 일이라, 실계좌 주문을 붙이려면 직접 코드를 더하고 직접 켜야 한다.
+모의 계좌다. 실계좌 주문은 live.LiveBroker가 같은 모양으로 맡고, coin --live로 직접 켜야 나간다.
 """
 from __future__ import annotations
 
 import json
+import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
+from typing import Iterator
 
 
 @dataclass
@@ -117,3 +120,28 @@ class PaperBroker:
             exchange=data.get("exchange", ""),
             last_seen=data.get("last_seen", {}),
         )
+
+
+@contextmanager
+def state_lock(state: Path, wait: float = 30) -> Iterator[None]:
+    """봇 작업(launchd)과 MCP 주문이 같은 상태 파일을 동시에 고치지 않게 잠근다.
+    프로세스가 죽으면 OS가 풀어 준다. fcntl이 없는 윈도에서는 잠그지 않는다"""
+    try:
+        import fcntl
+    except ImportError:
+        yield
+        return
+    with open(state.with_name(state.name + ".lock"), "a", encoding="utf-8") as f:
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    raise TimeoutError(f"{state.name}을 다른 실행이 쓰고 있어요. 잠시 뒤 다시 해 주세요.") from None
+                time.sleep(0.2)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)

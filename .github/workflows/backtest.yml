@@ -1,0 +1,87 @@
+# 세 겹 거름망 복리법 백테스트 (research/). 봇 CI와 따로, 손으로 돌리거나 research/가 바뀐 PR에서만 돈다.
+name: backtest
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "research/**"
+      - ".github/workflows/backtest.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false  # pip 설치 코드가 GitHub 토큰을 읽지 못하게
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: research/data
+          key: backtest-data-2021-01-2026-09-v1
+      - name: 바이낸스(data.binance.vision)·업비트·공포탐욕 지수 받기
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: python research/fetch_data.py --out research/data --start 2020-08 --end 2026-09
+      - run: ls -la research/data/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backtest-data
+          path: research/data
+          retention-days: 7
+
+  engine:
+    needs: data
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false  # pip 설치 코드가 GitHub 토큰을 읽지 못하게
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: backtest-data
+          path: research/data
+      - run: pip install -r research/requirements.txt
+      - name: 기법 엔진 + vectorbt 대조 (바이낸스 현물·선물, 업비트 현물)
+        run: python research/run_backtest.py --data research/data --out research/results/engine
+      - run: cat research/results/engine/report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backtest-engine
+          path: research/results/engine
+
+  freqtrade:
+    needs: data
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false  # pip 설치 코드가 GitHub 토큰을 읽지 못하게
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: backtest-data
+          path: research/data
+      - run: pip install -r research/freqtrade/requirements.txt
+      - name: Freqtrade 대조 (바이낸스 현물·선물, 지금 규칙과 기법)
+        shell: bash  # pipefail로 run_offline.py 실패가 grep에 가려지지 않게
+        run: python research/freqtrade/run_offline.py --data research/data --out research/results/freqtrade 2>&1 | { grep -v " - INFO - " || true; }
+      - run: cat research/results/freqtrade/report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backtest-freqtrade
+          path: research/results/freqtrade

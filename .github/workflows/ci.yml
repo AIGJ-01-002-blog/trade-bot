@@ -14,6 +14,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  secret-scan:
+    # 공개 저장소라 커밋 기록 전체에서 토큰·키 모양을 찾는다
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        run: |
+          curl -sSfL -o gl.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz
+          echo "5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba  gl.tgz" > gl.sha256
+          sha256sum -c gl.sha256
+          tar xzf gl.tgz gitleaks
+          ./gitleaks git --redact -v .
   test:
     strategy:
       fail-fast: false
@@ -63,4 +78,4 @@ jobs:
       - name: 이미지에서 작업 파일 한 번 돌리기 (화면에만)
         run: docker run --rm trade-bot python -m devlog_trade jobs /app/jobs.conf || echo "거래소 응답에 따라 실패할 수 있어요 (exit $?)"
       - name: 맥 스크립트 문법
-        run: bash -n macos/run-bot.sh macos/install.sh && python -c "import plistlib; plistlib.loads(open('macos/life.devlog.trade-bot.plist','rb').read().replace(b'__INTERVAL__', b'300'))"
+        run: bash -n macos/run-bot.sh macos/install.sh macos/find-python.sh && ./macos/find-python.sh && python -c "import plistlib; plistlib.loads(open('macos/life.devlog.trade-bot.plist','rb').read().replace(b'__INTERVAL__', b'300'))"

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -34,6 +35,9 @@ class Candle:
     open_time: datetime  # UTC
     close_time: datetime  # UTC. 이 시각이 지나야 다 만들어진 봉이다
     close: Decimal
+    open: Decimal | None = None  # 기법(ladder)이 손절·익절·ATR에 쓴다. 예제 전략은 종가만 본다
+    high: Decimal | None = None
+    low: Decimal | None = None
 
 
 Fetch = Callable[[str], object]
@@ -117,7 +121,7 @@ class Binance(Exchange):
         out = []
         for r in rows:  # [여는 시각(ms), 시가, 고가, 저가, 종가, 거래량, 닫는 시각(ms), …]
             opened = datetime.fromtimestamp(int(r[0]) / 1000, timezone.utc)
-            out.append(Candle(opened, opened + step, Decimal(str(r[4]))))
+            out.append(Candle(opened, opened + step, Decimal(str(r[4])), Decimal(str(r[1])), Decimal(str(r[2])), Decimal(str(r[3]))))
         return out
 
 
@@ -137,19 +141,48 @@ class Upbit(Exchange):
     def symbol_for(self, coin: str) -> str:
         return f"{self.currency}-{coin.upper()}"
 
+    # 업비트 시세 API는 IP마다 초당 10번까지 받는다. jobs가 계좌 여러 개를 잇달아 돌리면 넘어서 429가 난다
+    min_gap = 0.15  # 요청 사이 최소 간격(초)
+    retry_waits = (1.0, 2.0)  # 429를 받으면 이만큼 쉬고 다시 묻는다
+    _last_call = 0.0  # 계좌(인스턴스)가 달라도 같은 IP라 클래스에 둔다
+
+    def _get(self, url: str) -> object:
+        if self.fetch is not http_get_json:  # 시험용 가짜 fetch는 기다리지 않는다
+            return self.fetch(url)
+        for wait in (*self.retry_waits, None):
+            gap = Upbit._last_call + self.min_gap - time.monotonic()
+            if gap > 0:
+                time.sleep(gap)
+            Upbit._last_call = time.monotonic()
+            try:
+                return self.fetch(url)
+            except urllib.error.HTTPError as e:
+                if e.code != 429 or wait is None:
+                    raise
+                time.sleep(wait)
+        raise AssertionError("unreachable")
+
     def _candles(self, symbol: str, interval: str, limit: int) -> list[Candle]:
         if not symbol.startswith(self.currency + "-"):
             raise ExchangeError(f"업비트는 {self.currency} 마켓만 받아요. 예: KRW-BTC")
-        query = urllib.parse.urlencode({"market": symbol, "count": min(limit, 200)})
-        rows = self.fetch(f"{self.base_url}/v1/candles/{self.PATHS[interval]}?{query}")
-        if not isinstance(rows, list):
-            raise ExchangeError(f"업비트 시세를 받지 못했어요: {rows}")
         step = INTERVALS[interval]
-        out = []
-        for r in rows:  # 최신 봉이 먼저 온다. candle_date_time_utc가 봉 시작 시각
-            opened = datetime.fromisoformat(r["candle_date_time_utc"]).replace(tzinfo=timezone.utc)
-            out.append(Candle(opened, opened + step, Decimal(str(r["trade_price"]))))
-        return out
+        out: list[Candle] = []
+        to = None  # 한 번에 200개까지라, 더 필요하면 가장 오래된 봉 앞(to)부터 이어 받는다
+        while len(out) < limit:
+            params = {"market": symbol, "count": min(limit - len(out), 200)}
+            if to:
+                params["to"] = to
+            rows = self._get(f"{self.base_url}/v1/candles/{self.PATHS[interval]}?{urllib.parse.urlencode(params)}")
+            if not isinstance(rows, list):
+                raise ExchangeError(f"업비트 시세를 받지 못했어요: {rows}")
+            for r in rows:  # 최신 봉이 먼저 온다. candle_date_time_utc가 봉 시작 시각
+                opened = datetime.fromisoformat(r["candle_date_time_utc"]).replace(tzinfo=timezone.utc)
+                ohl = [None if r.get(k) is None else Decimal(str(r[k])) for k in ("opening_price", "high_price", "low_price")]
+                out.append(Candle(opened, opened + step, Decimal(str(r["trade_price"])), *ohl))
+            if len(rows) < params["count"]:  # 상장 초기라 더 오래된 봉이 없다
+                break
+            to = min(c.open_time for c in out).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return list({c.open_time: c for c in out}.values())
 
 
 class BinanceFutures(Binance):

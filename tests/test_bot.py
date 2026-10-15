@@ -5,6 +5,8 @@ import json
 import tempfile
 import threading
 import unittest
+import urllib.error
+import urllib.parse
 from contextlib import redirect_stderr, redirect_stdout
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -106,6 +108,39 @@ class ExchangeTest(unittest.TestCase):
         self.assertIn("api.upbit.com/v1/candles/minutes/60?market=KRW-BTC&count=200", urls[0])
         self.assertEqual([c.close for c in candles][:3], [Decimal(100), Decimal(99), Decimal(98)])
         self.assertEqual(ex.coin_name("KRW-BTC"), "비트코인")
+
+    def test_upbit_pages_past_200_with_to(self):
+        rows = upbit_rows(list(range(1, 301)), START)  # 300개, 최신이 먼저
+        urls = []
+
+        def fetch(url):
+            urls.append(url)
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+            older = [r for r in rows if "to" not in q or r["candle_date_time_utc"] + "Z" < q["to"][0]]
+            return older[: int(q["count"][0])]
+
+        candles = Upbit(fetch=fetch).fetch_candles("KRW-BTC", "1h", 250, now=START + timedelta(days=30))
+        self.assertEqual(len(urls), 2)
+        self.assertIn("count=50", urls[1])
+        self.assertIn("to=", urls[1])
+        self.assertEqual(len(candles), 250)
+        self.assertEqual(candles[-1].close, Decimal(300))
+        self.assertEqual(candles[0].close, Decimal(51))
+
+    def test_upbit_waits_and_retries_on_429(self):
+        calls = []
+
+        def fetch(url):
+            calls.append(url)
+            if len(calls) == 1:
+                raise urllib.error.HTTPError(url, 429, "Too Many Requests", {}, None)
+            return upbit_rows(CLOSES, START)
+
+        with mock.patch("devlog_trade.exchanges.http_get_json", fetch), mock.patch("devlog_trade.exchanges.time.sleep") as sleep:
+            candles = Upbit(fetch=fetch).fetch_candles("KRW-BTC", "1h", 10, now=START + timedelta(days=1))
+        self.assertEqual(len(calls), 2)
+        self.assertIn(1.0, [c.args[0] for c in sleep.call_args_list])
+        self.assertEqual(len(candles), len(CLOSES))
 
     def test_region_block_is_explained(self):
         import urllib.error
@@ -319,7 +354,7 @@ class CliTest(unittest.TestCase):
     def test_live_orders_are_refused(self):
         code, _, err = self.run_cli("run", str(SAMPLE), "--live")
         self.assertEqual(code, 2)
-        self.assertIn("실계좌 주문은 이 예제에 없어요", err)
+        self.assertIn("coin 명령에서만", err)
 
     def test_sends_new_days_once_and_retries_failed_sends(self):
         with tempfile.TemporaryDirectory() as d:
@@ -373,10 +408,64 @@ class CoinCliTest(unittest.TestCase):
         ex.fetch_candles = lambda symbol, interval, limit, now=now: real(symbol, interval, limit, now=now)
         return ex
 
-    def test_live_orders_are_refused(self):
-        code, _, err = self.run_coin(Binance(fetch=lambda url: []), "--live")
-        self.assertEqual(code, 2)
-        self.assertIn("실계좌 주문은 이 예제에 없어요", err)
+    def test_live_needs_setting_and_refuses_dry_run(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict("os.environ", {}, clear=True):
+            state = str(Path(d) / "live.json")
+            code, _, err = self.run_coin(Binance(fetch=lambda url: []), "--live", "--state", state)
+            self.assertEqual(code, 2)
+            self.assertIn("DEVLOG_TRADE_LIVE=1", err)
+            code, _, err = self.run_coin(Binance(fetch=lambda url: []), "--live", "--dry-run", "--state", state)
+            self.assertEqual(code, 2)
+            self.assertIn("--dry-run", err)
+            self.assertFalse(Path(state).exists())
+
+    def test_testnet_can_run_on_screen_only(self):
+        from devlog_trade import live
+        from tests.test_live import FakeExchange, binance_spot
+        fx = FakeExchange()
+        binance_spot(fx)
+        real_open = live.open_live
+        env = {"BINANCE_TESTNET_API_KEY": "k", "BINANCE_TESTNET_API_SECRET": "s"}
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict("os.environ", env, clear=True), \
+                mock.patch.object(live, "open_live", lambda *a: real_open(*a, send=fx)):
+            common = ("--live", "--testnet", "--dry-run", "--state", str(Path(d) / "t.json"), "--window", "3",
+                      "--max-order", "100", "--max-order-loss", "20", "--max-daily-loss", "50")
+            self.run_coin(self.binance(CLOSES, len(CLOSES) - 0.5), *common)
+            code, out, err = self.run_coin(self.binance(CLOSES, len(CLOSES) + 0.5), *common)
+        self.assertEqual(code, 0, err)
+        self.assertIn("[dry-run]", out)  # 테스트넷 체결을 devlog에 보내지 않고 화면에만
+        self.assertEqual(len([c for c in fx.calls if c[0] == "POST"]), 1)
+
+    def test_live_on_testnet_warms_up_then_orders_and_records_live(self):
+        """가짜 테스트넷: 첫 실행은 지난 봉으로 주문하지 않고, 새로 닫힌 봉에서만 주문하고 mode=LIVE로 남긴다"""
+        from devlog_trade import live
+        from tests.test_live import FakeExchange, binance_spot
+        fx = FakeExchange()
+        binance_spot(fx)
+        real_open = live.open_live
+        env = {"BINANCE_TESTNET_API_KEY": "k", "BINANCE_TESTNET_API_SECRET": "s", "DEVLOG_TOKEN": "secret"}
+        limits = ("--max-order", "100", "--max-order-loss", "20", "--max-daily-loss", "50")
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict("os.environ", env, clear=True), \
+                mock.patch.object(live, "open_live", lambda *a: real_open(*a, send=fx)):
+            state = str(Path(d) / "live.json")
+            fake = FakeDevlog()
+            try:
+                common = ("--live", "--testnet", "--state", state, "--server", fake.url, "--window", "3", *limits)
+                code, out, err = self.run_coin(self.binance(CLOSES, len(CLOSES) - 0.5), *common)
+                self.assertEqual(code, 0, err)
+                self.assertFalse([c for c in fx.calls if c[0] == "POST"])  # 데우기만
+                self.assertEqual(fake.calls, [])
+                code, out, err = self.run_coin(self.binance(CLOSES, len(CLOSES) + 0.5), *common)  # 300이 닫혀 위로 꺾임
+                self.assertEqual(code, 0, err)
+            finally:
+                fake.close()
+            saved = json.loads(Path(state).read_text(encoding="utf-8"))
+        orders = [c for c in fx.calls if c[0] == "POST"]
+        self.assertEqual(len(orders), 1)
+        self.assertTrue(all(c[1] == "testnet.binance.vision" for c in fx.calls))
+        sent = [c["params"]["arguments"] for c in fake.calls]
+        self.assertEqual([(a["side"], a["mode"]) for a in sent], [("BUY", "LIVE")])
+        self.assertEqual(saved["mode"], "LIVE")
 
     def test_trades_closed_candles_once_and_sends_coin_fields(self):
         with tempfile.TemporaryDirectory() as d:
@@ -461,11 +550,11 @@ class CoinCliTest(unittest.TestCase):
         self.assertEqual(broker.last_seen["BTCUSDT"], bars[-1].date)
 
     def test_futures_rules(self):
-        code, _, err = self.run_coin(BinanceFutures(fetch=lambda url: []), "--market", "futures", "--leverage", "8", "--dry-run")
+        code, _, err = self.run_coin(BinanceFutures(fetch=lambda url: []), "--market", "futures", "--leverage", "6", "--dry-run")
         self.assertEqual(code, 2)
-        self.assertIn("1~7배", err)
-        code, out, _ = self.run_coin(BinanceFutures(fetch=lambda url: []), "--market", "futures", "--leverage", "7", "--dry-run")
-        self.assertEqual(code, 0, out)  # 7배까지는 받는다
+        self.assertIn("1~5배", err)
+        code, out, _ = self.run_coin(BinanceFutures(fetch=lambda url: []), "--market", "futures", "--leverage", "5", "--dry-run")
+        self.assertEqual(code, 0, out)  # 5배까지는 받는다
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
             code = cli.main(["coin", "--exchange", "upbit", "--market", "futures", "--dry-run"])

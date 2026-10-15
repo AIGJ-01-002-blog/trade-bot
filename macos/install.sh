@@ -13,6 +13,11 @@ if [ "${1:-}" = "--uninstall" ]; then
   exit 0
 fi
 INTERVAL="${1:-300}"
+PY="$("$BOT_DIR/macos/find-python.sh")" || {
+  echo "Python 3.10 이상이 필요해요. 맥 기본 python3(3.9)로는 돌지 않아요. brew install python 또는 python.org에서 설치해 주세요." >&2
+  exit 1
+}
+echo "쓸 Python: $PY ($("$PY" --version))"
 mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
 sed -e "s#__BOT_DIR__#$BOT_DIR#g" -e "s#__INTERVAL__#$INTERVAL#g" -e "s#__LOG__#$LOG#g" \
   "$BOT_DIR/macos/life.devlog.trade-bot.plist" > "$PLIST"

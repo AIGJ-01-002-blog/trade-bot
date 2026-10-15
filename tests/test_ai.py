@@ -83,6 +83,96 @@ class GeminiTest(unittest.TestCase):
             ai.Gemini("k", post=lambda *a: {"candidates": []}).ask("p")
 
 
+class AnthropicTest(unittest.TestCase):
+    def test_sends_json_schema_with_low_effort_and_fallbacks_and_costs_in_won(self):
+        sent = {}
+
+        def post(url, body, headers, timeout):
+            sent.update(url=url, body=body, headers=headers, timeout=timeout)
+            return {"stop_reason": "end_turn", "content": [{"type": "thinking", "thinking": "..."},
+                                                           {"type": "text", "text": '{"action":"BUY","reason":"추세 전환"}'}],
+                    "usage": {"input_tokens": 1_000_000, "output_tokens": 100_000}}
+
+        c = ai.Anthropic("key", post=post)
+        r = c.ask("p")
+        self.assertEqual((r.action, r.reason, c.label), ("BUY", "추세 전환", "anthropic:claude-opus-5-5"))
+        self.assertEqual(sent["url"], "https://api.anthropic.com/v1/messages")
+        self.assertEqual(sent["headers"]["x-api-key"], "key")
+        self.assertEqual(sent["headers"]["anthropic-version"], "2023-06-01")
+        self.assertEqual(sent["headers"]["anthropic-beta"], "server-side-fallback-2026-07-01")
+        self.assertEqual(sent["body"]["fallbacks"], "default")
+        out = sent["body"]["output_config"]
+        self.assertEqual(out["effort"], "low")
+        self.assertEqual(out["format"]["schema"]["properties"]["action"]["enum"], ["BUY", "SELL", "HOLD"])
+        self.assertFalse(out["format"]["schema"]["additionalProperties"])
+        self.assertEqual(c.cost_krw(r), Decimal(8400))  # (100만×4 + 10만×20)/100만 = 6달러 × 1400원
+
+    def test_fallback_attempts_are_each_billed_at_their_own_model(self):
+        def post(url, body, headers, timeout):
+            return {"model": "claude-sonnet-5-5", "stop_reason": "end_turn",
+                    "content": [{"type": "text", "text": '{"action":"HOLD","reason":"관망"}'}],
+                    "usage": {"input_tokens": 1_000_000, "output_tokens": 0, "iterations": [
+                        {"type": "message", "model": "claude-opus-5-5", "input_tokens": 1_000_000, "output_tokens": 100_000},
+                        {"type": "fallback_message", "model": "claude-sonnet-5-5", "input_tokens": 1_000_000, "output_tokens": 0}]}}
+
+        r = ai.Anthropic("key", post=post).ask("p")
+        self.assertEqual(r.cost_krw, Decimal(8400) + Decimal(2800))  # Opus 시도 6달러 + Sonnet 시도 2달러
+
+    def test_billed_refusal_keeps_its_cost(self):
+        def post(url, body, headers, timeout):
+            return {"stop_reason": "refusal", "content": [], "usage": {"iterations": [
+                {"type": "message", "model": "claude-opus-5-5", "input_tokens": 1_000_000, "output_tokens": 0}]}}
+
+        with self.assertRaises(ai.AiError) as e:
+            ai.Anthropic("key", post=post).ask("p")
+        self.assertEqual(e.exception.cost_krw, Decimal(5600))
+
+    def test_haiku_has_no_fallback_header(self):
+        sent = {}
+
+        def post(url, body, headers, timeout):
+            sent.update(body=body, headers=headers)
+            return {"content": [{"type": "text", "text": '{"action":"HOLD","reason":"관망"}'}], "usage": {}}
+
+        ai.Anthropic("key", "claude-haiku-5-5", post=post).ask("p")
+        self.assertNotIn("fallbacks", sent["body"])
+        self.assertNotIn("anthropic-beta", sent["headers"])
+
+    def test_refusal_or_missing_key_is_an_ai_error(self):
+        with self.assertRaises(ai.AiError):
+            ai.Anthropic("")
+        with self.assertRaises(ai.AiError):
+            ai.Anthropic("k", post=lambda *a: {"stop_reason": "refusal", "content": []}).ask("p")
+
+
+class OpenAiTest(unittest.TestCase):
+    def test_sends_strict_schema_with_low_reasoning_and_costs_in_won(self):
+        sent = {}
+
+        def post(url, body, headers, timeout):
+            sent.update(url=url, body=body, headers=headers)
+            return {"choices": [{"message": {"content": '{"action":"SHORT","reason":"저항 확인"}'}}],
+                    "usage": {"prompt_tokens": 1_000_000, "completion_tokens": 100_000}}
+
+        c = ai.OpenAI("key", post=post)
+        r = c.ask("p", ai.ACTIONS["futures"])
+        self.assertEqual((r.action, r.reason, c.label), ("SHORT", "저항 확인", "openai:gpt-5"))
+        self.assertEqual(sent["url"], "https://api.openai.com/v1/chat/completions")
+        self.assertEqual(sent["headers"], {"Authorization": "Bearer key"})
+        self.assertEqual(sent["body"]["reasoning_effort"], "low")
+        fmt = sent["body"]["response_format"]["json_schema"]
+        self.assertTrue(fmt["strict"])
+        self.assertEqual(fmt["schema"]["properties"]["action"]["enum"], list(ai.ACTIONS["futures"]))
+        self.assertEqual(c.cost_krw(r), Decimal(3150))  # (100만×1.25 + 10만×10)/100만 = 2.25달러 × 1400원
+
+    def test_refusal_or_empty_or_missing_key_is_an_ai_error(self):
+        with self.assertRaises(ai.AiError):
+            ai.OpenAI("")
+        for data in ({"choices": [{"message": {"refusal": "no", "content": None}}]}, {"choices": []}):
+            with self.assertRaises(ai.AiError):
+                ai.OpenAI("k", post=lambda *a, d=data: d).ask("p")
+
+
 class BudgetTest(unittest.TestCase):
     def test_daily_calls_and_monthly_cost(self):
         with tempfile.TemporaryDirectory() as d:
@@ -203,6 +293,25 @@ class SwitchTest(unittest.TestCase):
             c = ai.make_client(self.args())
         self.assertEqual(c.label, "ollama:qwen2.5:14b")
         self.assertEqual(c.cost_krw(ai.Reply("HOLD", "x", 10**6, 10**6)), 0)
+
+
+    def test_anthropic_and_openai_providers_read_their_own_keys(self):
+        env = {"ANTHROPIC_API_KEY": "a", "OPENAI_API_KEY": "o"}
+        with mock.patch.dict("os.environ", env, clear=True):
+            self.assertEqual(ai.make_client(self.args(("ai_provider", "anthropic"))).label, "anthropic:claude-opus-5-5")
+            self.assertEqual(ai.make_client(self.args(("ai_provider", "openai"), ("ai_model", "gpt-5-mini"))).label,
+                             "openai:gpt-5-mini")
+        with mock.patch.dict("os.environ", {}, clear=True), self.assertRaises(ai.AiError):
+            ai.make_client(self.args(("ai_provider", "openai")))
+
+    def test_price_flags_override_the_table(self):
+        with mock.patch.dict("os.environ", {"OPENAI_API_KEY": "o"}, clear=True):
+            c = ai.make_client(self.args(("ai_provider", "openai"), ("ai_model", "gpt-5.5"),
+                                         ("ai_price_in", "5"), ("ai_price_out", "30")))
+        self.assertEqual(c.price, (Decimal(5), Decimal(30)))
+        with mock.patch.dict("os.environ", {"ANTHROPIC_API_KEY": "a"}, clear=True):
+            c = ai.make_client(self.args(("ai_provider", "anthropic"), ("ai_model", "claude-new")))
+        self.assertEqual(c.price, ai.ANTHROPIC_PRICE["claude-opus-5-5"])  # 모르는 모델은 비싼 값으로 어림
 
 
 class CoinAiCliTest(unittest.TestCase):

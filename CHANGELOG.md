@@ -9,6 +9,33 @@
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-15
+
+바이낸스 현물 테스트넷에서 실계좌 주문을 확인했어요(민서님 M1 맥, 2026-10-15). 1분봉 BTC로 매수·매도·매수 3건이 테스트넷에서 체결됐고, 봇 장부의 현금 9,980.57812 USDT가 거래소 잔고와 같았어요. 주문당 20 USDT 상한도 걸렸어요. 메인넷 주문은 여전히 `DEVLOG_TRADE_LIVE=1`과 `--live`가 함께 있어야 하고, 지금 `jobs.conf`는 모두 모의(`--dry-run`)예요.
+
+### 추가
+- 실계좌 주문 모듈 `devlog_trade/live.py` (#264): 바이낸스 현물·USDT-M 선물(롱·숏), 업비트 원화 현물에 시장가 주문. 모의 `PaperBroker`·`FuturesBroker`와 같은 모양의 `LiveBroker`·`LiveFuturesBroker`이고, 체결은 실제 체결가·수량·수수료·체결 시각으로 `mode=LIVE` 기록. `coin --live`로 켜고, 처음 보는 종목은 지난 봉으로 주문하지 않아요. 실거래소 `--live`는 `--dry-run`과 함께 못 쓰고, 테스트넷은 `--dry-run`으로 화면에만 볼 수 있어요.
+- 안전장치: 메인넷은 `DEVLOG_TRADE_LIVE=1`과 `--live` 둘 다(테스트넷은 `--live --testnet`), 출금 권한 키 거절, 주문당 금액·손실 상한과 하루 손실 상한(기본값 없음), 선물 1~5배와 격리 마진, 같은 봉 중복 주문 막기(주문 번호를 종목·방향·봉 시각으로)
+- `python -m devlog_trade.live check`(주문 없이 키·권한·잔고 확인), `resume`(손실 상한으로 멈춘 진입 다시 열기). 사용법은 `LIVE.md`
+- 공개 저장소 대비: CI에 gitleaks 비밀값 검사를 넣고, `.gitignore`에 키·인증서·로그 파일을 더했다. README에 키는 기기 비밀 저장소에만 두고 거래소 키는 출금 권한 없이 만든다고 적었다.
+
+- AI 판단 모델 고르기: `--ai-provider anthropic`(기본 `claude-opus-5-5`)·`openai`(기본 `gpt-5`)를 더했다. 키는 `ANTHROPIC_API_KEY`·`OPENAI_API_KEY`(맥은 키체인 `devlog-trade-bot-anthropic`·`devlog-trade-bot-openai`), 표에 없는 모델 가격은 `--ai-price-in`·`--ai-price-out`. 기본은 그대로 Gemini. README에 모델별 비용과 모의 계좌 비교 방법을 적었다.
+- 매매 봇 MCP 서버 `python -m devlog_trade.mcp`(stdio, 표준 라이브러리만): `trade_bot_prices`(시세·이동평균), `trade_bot_accounts`(계좌·포지션·평가 손익·AI 사용량), `trade_bot_order`(기본 모의 주문, 실계좌는 서버 `--live`와 상한·`live=true`가 함께 있어야), `trade_bot_ai`(AI 판단 켜고 끄기). 체결은 봇과 같은 길로 `mcp-manual` 전략 이름으로 기록하고, 기본은 devlog에 보내지 않는다(`--record`).
+- `trade-control.json`의 AI 켜고 끄기가 `--ai` 플래그와 `AI_DECISION`보다 먼저 적용된다.
+- 같은 상태 파일을 봇 작업과 대화 주문이 동시에 고치지 않게 잠근다(fcntl, 윈도는 잠그지 않음).
+- 세 겹 거름망 복리법 `coin --rule ladder` (1시간봉 모의 전용, 이슈 #11·#12·#13): 1일 방향·4시간 되돌림·1시간 돌파, ATR 손절과 1/3씩 분할 익절, 켈리 크기와 그림자 거래, 거래마다 레버리지, 하루·주 손실 브레이크, 코어 적립. 캔들에 시가·고가·저가를 더했고, 모의 선물에 일부 정리(`FuturesBroker.reduce`)를 더했다. `jobs.conf`에 비교용 세 계좌 줄을 넣었다.
+
+### 바뀜
+- 선물 레버리지 상한을 7배에서 5배로 낮췄다(모의·실계좌 같은 값, 민서님 결정 2026-10-15 세 겹 거름망 복리법 Q9). 6배 이상은 거절한다.
+
+### 고침
+- 실계좌 안전장치(리뷰 반영): 업비트 키 확인은 `out_of_scope`가 아니면 거절(429·5xx·인증 오류에 통과하지 않게), 한 번 손실 상한이 같은 손실로 걸린 하루 상한에 가려지지 않게, 선물을 같은 봉에 정리하고 뒤집을 때 두 주문의 번호를 따로, 거래소에서 사라진 선물 포지션(강제 청산)은 증거금만큼 잃은 것으로 셈해 상한에 넣는다.
+- Claude 대체 모델이 답하면 `usage.iterations`로 시도마다 그 모델 값으로 비용을 더하고, 거절돼도 청구된 비용을 예산에 넣는다.
+- 세 겹 거름망: 익절 1/3이 체결되지 않으면(수량 0) 익절 표시와 본전 손절을 미룬다. MCP 시세는 닫힌 봉이 없으면 도구 오류로 알린다. 맥 `run-bot.sh`는 키체인에 없는 키로 이미 받은 환경 변수를 지우지 않는다.
+- backtest 워크플로: 체크아웃 토큰을 남기지 않고, Freqtrade 실패가 `grep`에 가려지지 않게 했다.
+- 업비트 시세가 `jobs`에서 429(요청 너무 많음)로 빠지던 것: 요청 사이를 0.15초 띄우고 429면 1초·2초 쉬고 다시 묻는다. 한 번에 200개까지라 1일봉 250개(SMA200 과열 판단)를 `to`로 이어 받는다.
+- 맥 launchd가 기본 `/usr/bin/python3`(3.9)를 잡아 봇이 돌지 않던 문제: `macos/find-python.sh`가 Homebrew·python.org의 3.10 이상을 찾고, 없으면 `install.sh`가 설치 안내와 함께 멈춘다.
+
 ## [0.1.0] - 2026-10-14
 
 **필요한 devlog**: `record_trade`가 `exchange`·`currency`·소수 수량을 받는 버전(#254, PR #257). 그 전 devlog에서는 통화가 원화로 남아요. 선물 필드(`market`·`position_side`·`leverage`·`interval`, #260)는 아직 보내지 않고, 선물 체결은 이름·이유 꼬리표("비트코인 선물", "[선물 숏 진입 3x]")로 구분해요.
