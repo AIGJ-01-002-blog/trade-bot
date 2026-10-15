@@ -17,6 +17,8 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false  # pip 설치 코드가 GitHub 토큰을 읽지 못하게
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -41,6 +43,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false  # pip 설치 코드가 GitHub 토큰을 읽지 못하게
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -63,6 +67,8 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false  # pip 설치 코드가 GitHub 토큰을 읽지 못하게
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -72,7 +78,8 @@ jobs:
           path: research/data
       - run: pip install -r research/freqtrade/requirements.txt
       - name: Freqtrade 대조 (바이낸스 현물·선물, 지금 규칙과 기법)
-        run: python research/freqtrade/run_offline.py --data research/data --out research/results/freqtrade 2>&1 | grep -v " - INFO - "
+        shell: bash  # pipefail로 run_offline.py 실패가 grep에 가려지지 않게
+        run: python research/freqtrade/run_offline.py --data research/data --out research/results/freqtrade 2>&1 | { grep -v " - INFO - " || true; }
       - run: cat research/results/freqtrade/report.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:

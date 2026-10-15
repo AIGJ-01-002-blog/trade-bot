@@ -141,6 +141,8 @@ class TradeBotTools:
             candles = ex.fetch_candles(symbol, interval, max(count, 21) + 1)
         except (ExchangeError, OSError, ValueError, KeyError) as e:
             raise ToolError(f"{ex.code} {symbol} 시세를 받지 못했어요: {e}") from e
+        if not candles:
+            raise ToolError(f"{ex.code} {symbol} 닫힌 {interval} 봉이 아직 없어요.")
         closes = [c.close for c in candles]
         shown = candles[-count:]
         first, last = shown[0].close, shown[-1].close

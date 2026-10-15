@@ -343,6 +343,10 @@ class UpbitTrader(Trader):
         status, data = self._get("/v1/withdraws/chance", {"currency": "BTC", "net_type": "BTC"})
         if status < 400:
             raise LiveRefused("출금 권한이 켜진 업비트 키예요. 자산 조회·주문 조회·주문하기만 고른 키를 새로 만들어 주세요.")
+        error = data.get("error") if isinstance(data, dict) else None
+        name = error.get("name") if isinstance(error, dict) else None
+        if name != "out_of_scope":  # 429·5xx·인증 오류는 권한을 알려 주지 않으니 통과시키지 않는다
+            raise LiveRefused(f"업비트 키의 출금 권한을 확인하지 못했어요 (HTTP {status} {name or data}). 잠시 뒤 다시 해 주세요.")
 
     def _accounts(self) -> dict[str, Decimal]:
         status, data = self._get("/v1/accounts")
@@ -439,12 +443,15 @@ class LiveState:
 
     def _closed(self, pnl: Decimal, at: str) -> None:
         self._count(at, pnl)
-        if -pnl >= self.limits.max_order_loss and not self.halted:
+        # 같은 손실로 하루 상한도 걸렸어도 한 번 상한이 우선이다(하루 멈춤은 다음 날 저절로 풀리지만 이건 resume이 필요하다)
+        if -pnl >= self.limits.max_order_loss and not self.halted.startswith("한 번"):
             self.halted = f"한 번 청산 손실 {_num(-pnl)} {self.currency}가 상한 {_num(self.limits.max_order_loss)}에 닿았어요 ({at})"
 
     def _order(self, symbol: str, side: str, quantity: Decimal, price: Decimal, at: str, reduce_only: bool = False) -> OrderResult | None:
         try:
-            return self.trader.market_order(symbol, side, quantity, price, client_order_id(symbol, side, at), reduce_only)
+            # 뒤집는 봉에는 정리와 반대 진입이 같은 방향(BUY/SELL)·같은 봉이라, 정리 주문은 번호를 따로 둔다
+            intent = f"{side}-close" if reduce_only else side
+            return self.trader.market_order(symbol, side, quantity, price, client_order_id(symbol, intent, at), reduce_only)
         except LiveOrderError as e:
             self.log(str(e))
             return None
@@ -578,8 +585,10 @@ class LiveFuturesBroker(LiveState, FuturesBroker):
             return None
         held = abs(self.trader.free_base(symbol))
         if held <= 0:
-            self.log(f"{symbol} 포지션이 거래소에 없어요(강제 청산이나 직접 정리). 장부에서만 지워요.")
+            self.log(f"{symbol} 포지션이 거래소에 없어요(강제 청산이나 직접 정리). 장부에서 지우고 증거금만큼 잃은 것으로 셈해요.")
             del self.positions[symbol]
+            # 격리 마진이라 잃을 수 있는 최대는 증거금이다. 실제 손익을 모르니 가장 큰 손실로 두고 상한을 건다
+            self._closed(-pos.margin, at)
             return None
         r = self._order(symbol, "SELL" if pos.side == "LONG" else "BUY", min(pos.quantity, held), price, at, reduce_only=True)
         if r is None:

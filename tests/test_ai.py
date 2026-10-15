@@ -107,6 +107,26 @@ class AnthropicTest(unittest.TestCase):
         self.assertFalse(out["format"]["schema"]["additionalProperties"])
         self.assertEqual(c.cost_krw(r), Decimal(8400))  # (100만×4 + 10만×20)/100만 = 6달러 × 1400원
 
+    def test_fallback_attempts_are_each_billed_at_their_own_model(self):
+        def post(url, body, headers, timeout):
+            return {"model": "claude-sonnet-5-5", "stop_reason": "end_turn",
+                    "content": [{"type": "text", "text": '{"action":"HOLD","reason":"관망"}'}],
+                    "usage": {"input_tokens": 1_000_000, "output_tokens": 0, "iterations": [
+                        {"type": "message", "model": "claude-opus-5-5", "input_tokens": 1_000_000, "output_tokens": 100_000},
+                        {"type": "fallback_message", "model": "claude-sonnet-5-5", "input_tokens": 1_000_000, "output_tokens": 0}]}}
+
+        r = ai.Anthropic("key", post=post).ask("p")
+        self.assertEqual(r.cost_krw, Decimal(8400) + Decimal(2800))  # Opus 시도 6달러 + Sonnet 시도 2달러
+
+    def test_billed_refusal_keeps_its_cost(self):
+        def post(url, body, headers, timeout):
+            return {"stop_reason": "refusal", "content": [], "usage": {"iterations": [
+                {"type": "message", "model": "claude-opus-5-5", "input_tokens": 1_000_000, "output_tokens": 0}]}}
+
+        with self.assertRaises(ai.AiError) as e:
+            ai.Anthropic("key", post=post).ask("p")
+        self.assertEqual(e.exception.cost_krw, Decimal(5600))
+
     def test_haiku_has_no_fallback_header(self):
         sent = {}
 

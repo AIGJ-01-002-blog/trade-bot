@@ -62,7 +62,9 @@ def response_schema(actions: tuple[str, ...], strict: bool = False) -> dict:
 
 
 class AiError(RuntimeError):
-    pass
+    def __init__(self, message: str, cost_krw: Decimal = Decimal(0)):
+        super().__init__(message)
+        self.cost_krw = cost_krw  # 거절돼도 청구된 비용. 예산에 넣는다
 
 
 @dataclass
@@ -71,6 +73,7 @@ class Reply:
     reason: str
     tokens_in: int = 0
     tokens_out: int = 0
+    cost_krw: Decimal | None = None  # 시도마다 모델이 달라 제공자가 직접 계산한 비용(대체 모델이 답한 경우)
 
 
 Post = Callable[[str, dict, dict, float], dict]
@@ -167,13 +170,30 @@ class Anthropic:
             headers["anthropic-beta"] = "server-side-fallback-2026-07-01"
         data = self.post("https://api.anthropic.com/v1/messages", body, headers, self.timeout)
         usage = data.get("usage") or {}
+        cost = self._billed(usage, data.get("model"))
         if data.get("stop_reason") == "refusal":
-            raise AiError(f"Claude가 답을 거절했어요: {(data.get('stop_details') or {}).get('category')}")
+            raise AiError(f"Claude가 답을 거절했어요: {(data.get('stop_details') or {}).get('category')}", cost or Decimal(0))
         text = "".join(b.get("text", "") for b in data.get("content") or [] if b.get("type") == "text")
         if not text:
-            raise AiError(f"Claude 답에 내용이 없어요: {str(data)[:120]}")
+            raise AiError(f"Claude 답에 내용이 없어요: {str(data)[:120]}", cost or Decimal(0))
         action, reason = parse_reply(text, actions)
-        return Reply(action, reason, int(usage.get("input_tokens", 0)), int(usage.get("output_tokens", 0)))
+        return Reply(action, reason, int(usage.get("input_tokens", 0)), int(usage.get("output_tokens", 0)), cost)
+
+    def _billed(self, usage: dict, served: str | None) -> Decimal | None:
+        """대체 모델이 돌면 top-level usage는 답한 시도만 담는다. usage.iterations로 시도마다 그 모델 값으로 더한다.
+        시도에 모델 이름이 없으면 요청 모델과 답한 모델 중 비싼 값으로 어림한다(예산을 적게 잡지 않게)"""
+        iterations = usage.get("iterations") or []
+        if not iterations:
+            return None if served in (None, self.model) else usd_cost_krw(
+                Reply("", "", int(usage.get("input_tokens", 0)), int(usage.get("output_tokens", 0))), self._price_of(served), self.usd_krw)
+        total = Decimal(0)
+        for it in iterations:
+            price = self._price_of(it.get("model")) if it.get("model") else max(self.price, self._price_of(served), key=sum)
+            total += usd_cost_krw(Reply("", "", int(it.get("input_tokens", 0)), int(it.get("output_tokens", 0))), price, self.usd_krw)
+        return total
+
+    def _price_of(self, model: str | None) -> tuple[Decimal, Decimal]:
+        return ANTHROPIC_PRICE.get(model or "", self.price)
 
     def cost_krw(self, reply: Reply) -> Decimal:
         return usd_cost_krw(reply, self.price, self.usd_krw)
@@ -329,10 +349,10 @@ class AiStrategy:
         try:
             reply = self.client.ask(self.prompt(bar, position, hint), actions)
         except (AiError, OSError, ValueError, KeyError, TypeError) as e:
-            self.budget.record(Decimal(0))
+            self.budget.record(getattr(e, "cost_krw", Decimal(0)))
             self.log(f"AI 판단을 받지 못해 관망해요 ({bar.symbol} {bar.date}): {e}")
             return "HOLD"
-        self.budget.record(self.client.cost_krw(reply))
+        self.budget.record(reply.cost_krw if reply.cost_krw is not None else self.client.cost_krw(reply))
         self.reason = "AI: " + reply.reason
         return reply.action
 
