@@ -51,6 +51,18 @@ def _price(v: Decimal, currency: str) -> str:
     return f"{v:,.0f}원" if currency == "KRW" else f"{v.normalize():f} {currency}"
 
 
+def _signed(v: Decimal, currency: str) -> str:
+    return ("+" if v >= 0 else "-") + _money(abs(v), currency)
+
+
+def expected_pnl(fill: Fill, exit_price: Decimal, short: bool = False) -> Decimal:
+    """진입 체결을 exit_price에 모두 정리하면 남는 손익(예상). 들어갈 때 낸 수수료와, 같은 수수료율로 나올 때 낼 수수료를 뺀다"""
+    notional = fill.price * fill.quantity
+    rate = fill.fee / notional if notional > 0 else Decimal(0)
+    move = (fill.price - exit_price) if short else (exit_price - fill.price)
+    return move * fill.quantity - fill.fee - exit_price * fill.quantity * rate
+
+
 def color(fill: Fill) -> int:
     return GREEN if fill.side == "BUY" else RED
 
@@ -78,11 +90,13 @@ def text(mode: str, account: str, market: str, fill: Fill, plan: Plan, balance: 
     if entry:
         short = market == "futures" and fill.side == "SELL"
         if plan.take_profit > 0:
-            lines.append(f"**익절가 {_price(fill.price * (1 - plan.take_profit if short else 1 + plan.take_profit), cur)} "
-                         f"(+{(plan.take_profit * 100).normalize():f}%)**")
+            exit_price = fill.price * (1 - plan.take_profit if short else 1 + plan.take_profit)
+            lines.append(f"**익절가 {_price(exit_price, cur)} (+{(plan.take_profit * 100).normalize():f}%) · "
+                         f"약 {_signed(expected_pnl(fill, exit_price, short), cur)}**")
         if plan.stop_loss > 0:
-            lines.append(f"**손절가 {_price(fill.price * (1 + plan.stop_loss if short else 1 - plan.stop_loss), cur)} "
-                         f"(-{(plan.stop_loss * 100).normalize():f}%)**")
+            exit_price = fill.price * (1 + plan.stop_loss if short else 1 - plan.stop_loss)
+            lines.append(f"**손절가 {_price(exit_price, cur)} (-{(plan.stop_loss * 100).normalize():f}%) · "
+                         f"약 {_signed(expected_pnl(fill, exit_price, short), cur)}**")
     else:
         pnl = fill.realized_pnl
         cost = fill.price * fill.quantity - fill.fee - pnl  # 매수에 쓴 돈 (pnl = 판 돈 - 산 돈 - 수수료)
