@@ -14,7 +14,15 @@ KEY="$(security find-generic-password -a "$USER" -s devlog-trade-bot-anthropic -
 [ -n "$KEY" ] && export ANTHROPIC_API_KEY="$KEY"  # 키체인에 없으면 이미 받은 환경 변수를 그대로 둔다
 KEY="$(security find-generic-password -a "$USER" -s devlog-trade-bot-openai -w 2>/dev/null || true)"
 [ -n "$KEY" ] && export OPENAI_API_KEY="$KEY"  # 키체인에 없으면 이미 받은 환경 변수를 그대로 둔다
+# 실거래(LIVE.md): 업비트 키도 키체인(devlog-trade-bot-upbit-access·devlog-trade-bot-upbit-secret)에서 읽는다
+KEY="$(security find-generic-password -a "$USER" -s devlog-trade-bot-upbit-access -w 2>/dev/null || true)"
+[ -n "$KEY" ] && export UPBIT_ACCESS_KEY="$KEY"
+KEY="$(security find-generic-password -a "$USER" -s devlog-trade-bot-upbit-secret -w 2>/dev/null || true)"
+[ -n "$KEY" ] && export UPBIT_SECRET_KEY="$KEY"
 unset KEY
+# 실거래소 주문은 이 폴더에 trade-live.on 파일이 있을 때만 켠다(DEVLOG_TRADE_LIVE=1). 지우면 다음 바퀴부터 꺼진다.
+# jobs.conf 줄의 --live와 둘 다 있어야 주문이 나간다.
+[ -f "$BOT_DIR/trade-live.on" ] && export DEVLOG_TRADE_LIVE=1
 export PYTHONUTF8=1
 echo "=== $(date '+%Y-%m-%d %H:%M:%S')"
 PY="$("$BOT_DIR/macos/find-python.sh")" || { echo "Python 3.10 이상을 찾지 못했어요. brew install python 또는 python.org 설치 뒤 다시 돌려요."; exit 1; }
