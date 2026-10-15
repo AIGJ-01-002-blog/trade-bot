@@ -48,6 +48,9 @@ def _amount(v: Decimal, currency: str) -> str:
 class Session:
     """상태 파일·보내지 못한 체결·devlog 보내기를 한곳에서 다룬다. CSV·현물·선물 모드가 함께 쓴다"""
 
+    day, day_pnl = "", Decimal(0)
+    profit_stop = Decimal(0)  # 하루 실현 손익이 이 금액 이상이면 그날 새 진입을 쉰다(0이면 끔)
+
     def __init__(self, args: argparse.Namespace, new_broker: Callable[[], PaperBroker | FuturesBroker] | None,
                  broker: PaperBroker | FuturesBroker | None = None):
         self.args = args
@@ -63,6 +66,9 @@ class Session:
         self.pending = [_fill_from(d) for d in json.loads(self.pending_file.read_text(encoding="utf-8"))] \
             if self.pending_file.exists() else []
         self.journal = None if args.dry_run else Journal(args.server, os.environ.get("DEVLOG_TOKEN", ""))
+        # 하루 수익 멈춤용 한국 날짜별 실현 손익. 상태 파일에 함께 남아 5분마다 새로 뜨는 실행이 이어 센다
+        saved = json.loads(self.state.read_text(encoding="utf-8")).get("day_profit", {}) if self.state.exists() else {}
+        self.day, self.day_pnl = saved.get("day", ""), Decimal(saved.get("pnl", "0"))
 
     def send_all(self) -> bool:
         while self.pending:
@@ -84,8 +90,27 @@ class Session:
     def _add(self, fill: Fill | None) -> None:
         if fill:
             self.pending.append(fill)
+            if fill.realized_pnl is not None:
+                self._day(fill.executed_at)
+                self.day_pnl += fill.realized_pnl
             # devlog 자동매매 화면(/trade)용. 실계좌 체결은 report가 빼고, 매매 일지 보내기와 따로 다음 알림 때 나간다
             report.add_event(self.state.parent, report.fill_event(self.state.name, self.broker.market, fill))
+
+    def _day(self, at: str) -> None:
+        day = datetime.fromisoformat(at.replace("Z", "+00:00")).astimezone(KST).date().isoformat()
+        if day != self.day:
+            self.day, self.day_pnl = day, Decimal(0)
+
+    def _entry_blocked(self, at: str) -> bool:
+        """하루 수익 멈춤: 그날 번 돈이 목표에 닿았으면 새 진입만 막는다. 들고 있는 것의 손절·익절·정리는 그대로 나간다"""
+        if self.profit_stop <= 0:
+            return False
+        self._day(at)
+        if self.day_pnl < self.profit_stop:
+            return False
+        print(f"{self.state.name}: 오늘({self.day}) 실현 수익이 {_amount(self.day_pnl, self.broker.currency)}로 "
+              f"하루 목표 {_amount(self.profit_stop, self.broker.currency)}에 닿아 새 진입을 쉬어요.")
+        return True
 
     def trade(self, strategy: MovingAverageCross, bars: list[Bar], quantity: Callable[[Decimal], Decimal],
               executed_at: Callable[[Bar], str]) -> None:
@@ -123,7 +148,7 @@ class Session:
                 for sig in signals if fresh else []:
                     if sig.side == "CLOSE":
                         self._add(broker.close(symbol, bar.close, sig.reason, at))
-                    else:
+                    elif not self._entry_blocked(at):
                         qty = broker.quantity_for(budget, bar.close)
                         self._add(broker.open(symbol, bar.name, sig.side, qty, bar.close, sig.reason, at))
             else:
@@ -132,6 +157,8 @@ class Session:
                 if not fresh or signal is None:
                     continue
                 if signal.side == "BUY":
+                    if self._entry_blocked(at):
+                        continue
                     spend = min(budget, broker.cash)
                     qty = (spend / (bar.close * (1 + broker.fee_rate))).quantize(COIN_STEP, rounding=ROUND_FLOOR)
                     self._add(broker.buy(symbol, bar.name, qty, bar.close, signal.reason, at))
@@ -142,6 +169,12 @@ class Session:
 
     def save(self) -> None:
         self.broker.save(self.state)
+        if self.day:
+            data = json.loads(self.state.read_text(encoding="utf-8"))
+            data["day_profit"] = {"day": self.day, "pnl": str(self.day_pnl)}
+            tmp = self.state.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(self.state)
         if self.pending:
             self.pending_file.write_text(json.dumps([asdict(f) for f in self.pending], default=str, ensure_ascii=False, indent=2),
                                          encoding="utf-8")
@@ -258,7 +291,14 @@ def _coin_session(args: argparse.Namespace, ex: Exchange, symbols: list[str], fe
         print(f"{ex.code} {ex.market} 1h봉 · {', '.join(seen) or '받은 시세 없음'} · {b.describe()}")
         return 0 if ok else 1
     budget = Decimal(args.budget) if args.budget else ex.default_budget
-    rule = MovingAverageCross(window=args.window, stop_loss=Decimal(args.stop_loss), period=f"개 {args.interval}봉")
+    take_profit = Decimal(args.take_profit or 0)
+    rule = MovingAverageCross(window=args.window, stop_loss=Decimal(args.stop_loss), period=f"개 {args.interval}봉",
+                              take_profit=take_profit)
+    if args.daily_profit_stop:
+        # 모의는 처음 현금, 실계좌는 이번 바퀴를 시작할 때 계좌 크기(주문 가능 현금 + 들고 있는 코인의 산 값)를 기준으로 한다
+        base = sum((getattr(p, "margin", None) or p.quantity * p.avg_price for p in b.positions.values()), b.cash) \
+            if args.live else cash
+        s.profit_stop = base * Decimal(args.daily_profit_stop)
     closed_at: dict[str, datetime] = {}  # 봉 시작 시각 → 닫힌 시각. 종목마다 아래에서 채운다
 
     def verdict(bar: Bar, verdict: str, side: str, reason: str) -> None:  # AI 진입 판단을 자동매매 화면에 남긴다
@@ -276,6 +316,8 @@ def _coin_session(args: argparse.Namespace, ex: Exchange, symbols: list[str], fe
     model = strategy.client.label if isinstance(strategy, ai.AiStrategy) else ""
     shown = {"전략": f"{args.window}봉 이동평균 교차", "봉": args.interval, "코인": ", ".join(symbols),
              "한 번 금액": _amount(budget, ex.currency), "손절": f"{(Decimal(args.stop_loss) * 100).normalize():f}%",
+             "익절": f"{(take_profit * 100).normalize():f}%" if take_profit > 0 else "없음 (평균선이 꺾일 때 정리)",
+             "하루 수익 멈춤": _amount(s.profit_stop, ex.currency) if s.profit_stop > 0 else "없음",
              "AI 판단": f"켜짐 ({model})" if model else "꺼짐", "모드": "모의(--dry-run)" if args.dry_run else "모의"}
     if ex.market == "futures":
         shown["레버리지"] = f"{b.leverage:f}배"
@@ -366,6 +408,8 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--cash", help="처음 모의 현금. 기본 바이낸스 1000 USDT, 업비트 1,000,000원")
     c.add_argument("--budget", help="한 번 들어갈 때 쓸 금액(선물은 증거금). 기본 바이낸스 100 USDT, 업비트 100,000원")
     c.add_argument("--fee-rate", help="수수료율. 기본 바이낸스 현물 0.001, 선물 0.0005, 업비트 0.0005")
+    c.add_argument("--take-profit", help="익절 비율 (0.04 = 들어간 값보다 4%% 유리해지면 정리). 안 주면 평균선이 꺾일 때 정리해요")
+    c.add_argument("--daily-profit-stop", help="하루(한국 시간) 실현 수익이 계좌의 이 비율에 닿으면 그날 새 진입을 쉬어요 (0.02 = 2%%). 모의는 처음 현금, 실계좌는 그 바퀴의 현금 + 보유 코인 산 값 기준")
     c.add_argument("--leverage", default="1", help=f"선물 레버리지 (1~{live.LEVERAGE_CAP}배, 기본 1배)")
     _common(c)
     c.add_argument("--live", action="store_true",

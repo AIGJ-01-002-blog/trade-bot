@@ -15,11 +15,13 @@ from pathlib import Path
 
 from .broker import state_lock
 
-FIELDS = ("coins", "window", "stop_loss", "budget", "paused")
+FIELDS = ("coins", "window", "stop_loss", "take_profit", "daily_profit_stop", "budget", "paused")
 LADDER_FIELDS = ("coins", "paused")  # 거름망 기법은 자기 규칙이 있어 코인과 멈춤만 바꾼다
 MAX_COINS = 10
 WINDOW = (2, 60)
 STOP_LOSS = (Decimal("0.005"), Decimal("0.2"))
+TAKE_PROFIT = (Decimal("0.005"), Decimal("0.5"))  # 0은 끔(평균선이 꺾일 때 정리)
+DAILY_PROFIT_STOP = (Decimal("0.005"), Decimal("0.2"))  # 0은 끔
 RISK_PER_TRADE = Decimal("0.01")  # 세 겹 거름망 복리법(2026-10-15 민서님): 한 번 손실은 처음 현금의 1%까지
 ACCOUNT = re.compile(r"^trade-state-[A-Za-z0-9_.-]+\.json$")
 COIN = re.compile(r"^[A-Z0-9]{2,15}$")
@@ -71,6 +73,15 @@ def clean(account: str, values: dict, ladder: bool, max_budget: Decimal) -> dict
             if not WINDOW[0] <= n <= WINDOW[1]:
                 raise RuleError(f"window는 {WINDOW[0]}~{WINDOW[1]}봉 사이예요.")
             out[key] = n
+        elif key in ("take_profit", "daily_profit_stop"):
+            try:
+                d = Decimal(str(value))
+            except InvalidOperation:
+                raise RuleError(f"{key}는 숫자예요.") from None
+            low, high = TAKE_PROFIT if key == "take_profit" else DAILY_PROFIT_STOP
+            if d != 0 and not low <= d <= high:
+                raise RuleError(f"{key}는 0(끔) 또는 {low}~{high}({low * 100:g}%~{high * 100:g}%) 사이예요.")
+            out[key] = f"{d.normalize():f}"
         elif key in ("stop_loss", "budget"):
             try:
                 d = Decimal(str(value))
@@ -123,4 +134,7 @@ def apply(args, account: str) -> dict:
             args.stop_loss = row["stop_loss"]
         if row.get("budget"):
             args.budget = row["budget"]
+        for key in ("take_profit", "daily_profit_stop"):  # "0"도 jobs.conf 값을 덮어 끈다
+            if row.get(key) is not None:
+                setattr(args, key, row[key])
     return row

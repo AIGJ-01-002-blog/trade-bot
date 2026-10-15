@@ -112,9 +112,10 @@ touch trade-live.on                                                             
 `jobs.conf` 맨 아래에 한 줄을 더해요. `--dry-run`이 없어 체결은 devlog 매매 일지에 실계좌로 남아요(키체인 `devlog-trade-bot` 토큰이 있을 때).
 
 ```text
---exchange upbit --market spot --interval 1h --coins BTC,ETH --live --max-order 6000 --max-order-loss 1000 --max-daily-loss 1500
+--exchange upbit --market spot --interval 1h --coins BTC --stop-loss 0.02 --take-profit 0.04 --daily-profit-stop 0.02 --live --max-order 6000 --max-order-loss 1000 --max-daily-loss 1500
 ```
 
+- 손절 -2%, 익절 +4%(손익비 1:2)이고, 그날 실현 수익이 계좌의 2%(약 200원)에 닿으면 그날은 새로 사지 않아요. 들고 있는 것의 손절·익절·정리는 그대로 나가요.
 - 끄기: `rm trade-live.on` 하면 다음 바퀴부터 실거래 줄은 주문 없이 멈춰요(종료 코드 2). 들고 있는 코인은 업비트 앱에서 직접 팔아요.
 - 손실 상한에 닿으면 새 매수를 멈추고 기록에 이유가 남아요. 매도는 계속 나가요.
 

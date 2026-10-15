@@ -112,7 +112,7 @@ class TradeBotTools:
              "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}},
             {"name": "trade_bot_rules",
              "title": "매매 기준 정하기",
-             "description": "모의 계좌마다 봇이 따를 기준(코인·이동평균 봉 수·손절·한 번 금액·멈춤)을 봅니다(get), 바꿉니다(set), "
+             "description": "모의 계좌마다 봇이 따를 기준(코인·이동평균 봉 수·손절·익절·하루 수익 멈춤·한 번 금액·멈춤)을 봅니다(get), 바꿉니다(set), "
                             "jobs.conf대로 되돌립니다(clear). 판단은 이 대화의 AI가 하고, 주문은 봇이 5분마다 이 기준과 상한 안에서 냅니다. "
                             "다음 바퀴부터 적용되고 devlog 자동매매 화면에 '기준을 정한 곳'으로 보입니다. 실계좌(trade-live-…)는 바꾸지 않습니다. "
                             "세 겹 거름망 계좌(trade-state-ladder-…)는 코인과 멈춤만 됩니다. 손절에 걸렸을 때 잃는 돈(금액 × 레버리지 × 손절)이 "
@@ -124,6 +124,9 @@ class TradeBotTools:
                  "window": {"type": "integer", "minimum": rules.WINDOW[0], "maximum": rules.WINDOW[1],
                             "description": "이동평균에 쓰는 봉 수"},
                  "stop_loss": {"type": "string", "description": "손절 비율, 0.005~0.2 (0.03 = -3%)"},
+                 "take_profit": {"type": "string", "description": "익절 비율, 0(끔) 또는 0.005~0.5 (0.04 = +4%에서 정리)"},
+                 "daily_profit_stop": {"type": "string",
+                                       "description": "하루 실현 수익이 처음 현금의 이 비율에 닿으면 그날 새 진입을 쉼, 0(끔) 또는 0.005~0.2"},
                  "budget": {"type": "string", "description": "한 번 들어갈 금액(계좌 통화, 선물은 증거금). 봇 기본값 이하로 줄이기만 됩니다"},
                  "paused": {"type": "boolean", "description": "true면 이 계좌는 새로 사고팔지 않고 건너뜁니다"},
                  "reason": {"type": "string", "description": "왜 이렇게 정했는지 한 줄. set에 꼭 넣습니다"}},
@@ -342,7 +345,9 @@ class TradeBotTools:
     # ---- 매매 기준 (규칙형: 판단은 대화의 AI, 주문은 봇 코드)
     def rules(self, action: str = "get", account: str = "", reason: str = "", **values) -> dict:
         limits = {"coins": f"1~{rules.MAX_COINS}개", "window": f"{rules.WINDOW[0]}~{rules.WINDOW[1]}봉",
-                  "stop_loss": f"{rules.STOP_LOSS[0]}~{rules.STOP_LOSS[1]}", "budget": "봇 기본값 이하(줄이기만)",
+                  "stop_loss": f"{rules.STOP_LOSS[0]}~{rules.STOP_LOSS[1]}",
+                  "take_profit": f"0(끔) 또는 {rules.TAKE_PROFIT[0]}~{rules.TAKE_PROFIT[1]}",
+                  "daily_profit_stop": f"0(끔) 또는 {rules.DAILY_PROFIT_STOP[0]}~{rules.DAILY_PROFIT_STOP[1]}", "budget": "봇 기본값 이하(줄이기만)",
                   "한 번 손실": "금액 × 레버리지 × 손절 ≤ 처음 현금의 1%", "레버리지": "대화로 바꾸지 않음"}
         if action == "get":
             try:
