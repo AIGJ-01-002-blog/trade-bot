@@ -8,7 +8,11 @@ import json
 import urllib.request
 from decimal import Decimal
 
+from . import __version__
 from .broker import Fill
+
+# devlog.life 앞단은 파이썬 기본 이름(Python-urllib)을 403으로 막는다. 봇 이름을 붙여야 통과한다
+AGENT = f"devlog-trade-bot/{__version__}"
 
 
 class JournalError(RuntimeError):
@@ -47,7 +51,8 @@ def call_tool(url: str, token: str, name: str, arguments: dict, timeout: float =
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}},
                       default=lambda v: str(v) if isinstance(v, Decimal) else v).encode("utf-8")
     req = urllib.request.Request(url, data=body, method="POST", headers={
-        "Content-Type": "application/json", "Accept": "application/json", "Authorization": "Bearer " + token})
+        "Content-Type": "application/json", "Accept": "application/json", "User-Agent": AGENT,
+        "Authorization": "Bearer " + token})
     with urllib.request.urlopen(req, timeout=timeout) as res:  # noqa: S310 (devlog 주소만 부른다)
         try:
             data = json.loads(res.read().decode("utf-8"))

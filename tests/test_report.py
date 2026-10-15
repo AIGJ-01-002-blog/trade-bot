@@ -184,5 +184,26 @@ class JobsReportTest(unittest.TestCase):
             self.assertEqual((code, fake.calls), (0, []))
 
 
+class UserAgentTest(unittest.TestCase):
+    def test_devlog_calls_carry_bot_name(self):
+        """devlog.life 앞단이 Python-urllib 이름을 403으로 막아서 봇 이름을 붙여 부른다"""
+        from devlog_trade import journal
+        seen = {}
+
+        class Res(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def fake(req, timeout):
+            seen.update(req.header_items())
+            return Res(json.dumps({"result": {"content": [{"type": "text", "text": "ok"}]}}).encode())
+        with mock.patch("urllib.request.urlopen", fake):
+            journal.call_tool("https://devlog.test/api/mcp", "t", "report_trade_bot", {})
+        self.assertEqual(seen.get("User-agent"), f"devlog-trade-bot/{__version__}")
+
+
 if __name__ == "__main__":
     unittest.main()
