@@ -1,5 +1,6 @@
 """모의 계좌·예제 전략·devlog 기록 보내기를 확인한다. 가짜 devlog 서버로 보내기와 다시 보내기를 본다."""
 
+import argparse
 import io
 import json
 import tempfile
@@ -233,6 +234,20 @@ class StrategyTest(unittest.TestCase):
         self.assertEqual([x.side for x in sig], ["CLOSE"])
         self.assertIn("손절선", sig[0].reason)
 
+    def test_take_profit_sells_before_the_average_turns(self):
+        s = MovingAverageCross(window=3, take_profit=Decimal("0.04"))
+        signal = self.feed(s, [100, 101, 102, 103, 104], holding=True, avg=Decimal(100))
+        self.assertEqual((signal.side, signal.reason), ("SELL", "익절선 +4% 도달"))
+        self.assertIsNone(self.feed(MovingAverageCross(window=3), [100, 101, 102, 103, 104], holding=True, avg=Decimal(100)))
+
+    def test_futures_take_profit_both_sides(self):
+        for side, closes in (("LONG", [100, 101, 102, 103, 105]), ("SHORT", [100, 99, 98, 97, 95])):
+            s = MovingAverageCross(window=3, take_profit=Decimal("0.04"))
+            sig = None
+            for i, c in enumerate(closes):
+                sig = s.on_bar_futures(Bar(f"d{i}", "A", "가", Decimal(c)), side, Decimal(100))
+            self.assertEqual([(x.side, x.reason) for x in sig], [("CLOSE", "익절선 +4% 도달")], side)
+
     def test_waits_until_enough_history(self):
         self.assertIsNone(self.feed(MovingAverageCross(window=5), [1, 2, 3, 4, 5]))
 
@@ -450,7 +465,8 @@ class CoinCliTest(unittest.TestCase):
             state = str(Path(d) / "live.json")
             fake = FakeDevlog()
             try:
-                common = ("--live", "--testnet", "--state", state, "--server", fake.url, "--window", "3", *limits)
+                common = ("--live", "--testnet", "--state", state, "--server", fake.url, "--window", "3", *limits,
+                          "--take-profit", "0.04", "--daily-profit-stop", "0.02")  # 실계좌 줄에도 익절·하루 수익 멈춤이 걸린다
                 code, out, err = self.run_coin(self.binance(CLOSES, len(CLOSES) - 0.5), *common)
                 self.assertEqual(code, 0, err)
                 self.assertFalse([c for c in fx.calls if c[0] == "POST"])  # 데우기만
@@ -548,6 +564,25 @@ class CoinCliTest(unittest.TestCase):
         s.trade_coin(MovingAverageCross(window=3), "BTCUSDT", bars, Decimal(100), lambda bar: bar.date)
         self.assertEqual(s.pending, [])  # 모의라면 매수·매도가 나왔을 봉들
         self.assertEqual(broker.last_seen["BTCUSDT"], bars[-1].date)
+
+    def test_daily_profit_stop_blocks_new_entries_only_that_day(self):
+        with tempfile.TemporaryDirectory() as d:
+            args = argparse.Namespace(state=str(Path(d) / "s.json"), dry_run=True)
+            s = cli.Session(args, lambda: PaperBroker(cash=Decimal(1000), currency="USDT", exchange="BINANCE"))
+            s.profit_stop, s.day, s.day_pnl = Decimal(20), "2026-10-13", Decimal(25)
+            bars = [Bar(f"2026-10-13T{i:02d}:00:00Z", "BTCUSDT", "비트코인", Decimal(c)) for i, c in enumerate(CLOSES)]
+            with redirect_stdout(io.StringIO()) as out:
+                s.trade_coin(MovingAverageCross(window=3), "BTCUSDT", bars, Decimal(100), lambda bar: bar.date)
+            self.assertEqual(s.pending, [])
+            self.assertIn("새 진입을 쉬어요", out.getvalue())
+            s.save()
+            again = cli.Session(args, None)
+            self.assertEqual((again.day, again.day_pnl), ("2026-10-13", Decimal(25)))  # 다음 바퀴도 이어 센다
+            again.profit_stop = Decimal(20)
+            nxt = [Bar(f"2026-10-14T{i:02d}:00:00Z", "BTCUSDT", "비트코인", Decimal(c)) for i, c in enumerate(CLOSES)]
+            again.broker.last_seen = {}
+            again.trade_coin(MovingAverageCross(window=3), "BTCUSDT", nxt, Decimal(100), lambda bar: bar.date)
+            self.assertIn("BUY", [f.side for f in again.pending])  # 날이 바뀌면 다시 산다
 
     def test_futures_rules(self):
         code, _, err = self.run_coin(BinanceFutures(fetch=lambda url: []), "--market", "futures", "--leverage", "6", "--dry-run")

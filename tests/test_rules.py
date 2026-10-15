@@ -37,10 +37,13 @@ class RulesTest(unittest.TestCase):
         ok = rules.clean("trade-state-binance-spot-1h.json", {"coins": "btc, eth,btc", "window": 7, "stop_loss": "0.030",
                                                               "budget": "50", "paused": False}, False, Decimal(500))
         self.assertEqual(ok, {"coins": "BTC,ETH", "window": 7, "stop_loss": "0.03", "budget": "50", "paused": False})
+        self.assertEqual(rules.clean("trade-state-x.json", {"take_profit": "0.040", "daily_profit_stop": "0"}, False, Decimal(500)),
+                         {"take_profit": "0.04", "daily_profit_stop": "0"})
         bad = [("trade-live-binance-spot-1m.json", {"window": 7}, False), ("trade-state-x.json", {"window": 1}, False),
                ("trade-state-x.json", {"stop_loss": "0.5"}, False), ("trade-state-x.json", {"budget": "501"}, False),
                ("trade-state-x.json", {"budget": "0"}, False), ("trade-state-x.json", {"coins": "BTC;rm"}, False),
-               ("trade-state-ladder-x.json", {"window": 7}, True)]
+               ("trade-state-ladder-x.json", {"window": 7}, True), ("trade-state-x.json", {"take_profit": "0.9"}, False),
+               ("trade-state-x.json", {"daily_profit_stop": "0.001"}, False), ("trade-state-ladder-x.json", {"take_profit": "0.04"}, True)]
         for account, values, ladder in bad:
             with self.subTest(account=account, values=values), self.assertRaises(rules.RuleError):
                 rules.clean(account, values, ladder, Decimal(500))

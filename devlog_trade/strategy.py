@@ -32,11 +32,14 @@ def read_bars(path: Path) -> list[Bar]:
 
 
 class MovingAverageCross:
-    def __init__(self, window: int = 5, stop_loss: Decimal = Decimal("0.03"), period: str = "일"):
-        """period: 신호 이유에 쓰는 기간 이름. 종가 CSV는 "5일", 코인 1시간봉은 "5개 1h봉"처럼 읽힌다"""
+    def __init__(self, window: int = 5, stop_loss: Decimal = Decimal("0.03"), period: str = "일",
+                 take_profit: Decimal = Decimal(0)):
+        """period: 신호 이유에 쓰는 기간 이름. 종가 CSV는 "5일", 코인 1시간봉은 "5개 1h봉"처럼 읽힌다.
+        take_profit: 들어간 값보다 이만큼 유리해지면 바로 정리한다(0이면 끔, 평균선이 꺾일 때까지 들고 간다)"""
         self.window = window
         self.period = period
         self.stop_loss = stop_loss
+        self.take_profit = take_profit
         self.closes: dict[str, list[Decimal]] = {}
 
     def _cross(self, bar: Bar) -> tuple[bool, str | None]:
@@ -49,6 +52,9 @@ class MovingAverageCross:
         above = bar.close > sum(history[-self.window:]) / self.window
         return True, "UP" if above and not prev_above else "DOWN" if not above and prev_above else None
 
+    def _tp_reason(self) -> str:
+        return f"익절선 +{(self.take_profit * 100).normalize():f}% 도달"
+
     def on_bar(self, bar: Bar, holding: bool, avg_price: Decimal) -> Signal | None:
         """현물: 사고 팔기만 한다(공매도 없음)"""
         ready, cross = self._cross(bar)
@@ -56,6 +62,8 @@ class MovingAverageCross:
             return None
         if holding and avg_price > 0 and bar.close <= avg_price * (1 - self.stop_loss):
             return Signal("SELL", f"손절선 -{self.stop_loss * 100:.0f}% 도달")
+        if holding and avg_price > 0 and self.take_profit > 0 and bar.close >= avg_price * (1 + self.take_profit):
+            return Signal("SELL", self._tp_reason())
         if not holding and cross == "UP":
             return Signal("BUY", f"종가가 {self.window}{self.period} 이동평균선 위로 올라섬")
         if holding and cross == "DOWN":
@@ -71,6 +79,9 @@ class MovingAverageCross:
         out: list[Signal] = []
         if side == "LONG" and bar.close <= entry * (1 - self.stop_loss) or side == "SHORT" and bar.close >= entry * (1 + self.stop_loss):
             return [Signal("CLOSE", f"손절선 -{self.stop_loss * 100:.0f}% 도달")]
+        tp = self.take_profit
+        if tp > 0 and (side == "LONG" and bar.close >= entry * (1 + tp) or side == "SHORT" and bar.close <= entry * (1 - tp)):
+            return [Signal("CLOSE", self._tp_reason())]
         if cross == "UP":
             if side == "SHORT":
                 out.append(Signal("CLOSE", f"종가가 {self.window}{self.period} 이동평균선 위로 올라섬"))
