@@ -31,8 +31,9 @@ class NotifyTest(unittest.TestCase):
         self.assertIn("[🔴 실거래] 매수 비트코인", t)
         self.assertIn("가격 150,000,000원", t)
         self.assertIn("금액 6,000원", t)
-        self.assertIn("**익절가 156,000,000원 (+4%)**", t)
-        self.assertIn("**손절가 147,000,000원 (-2%)**", t)
+        # 6,000원어치: +4%면 +240원에서 수수료 3원 + 3.12원을 뺀 약 +234원, -2%면 -120원 - 3원 - 2.94원 = 약 -126원
+        self.assertIn("**익절가 156,000,000원 (+4%) · 약 +234원**", t)
+        self.assertIn("**손절가 147,000,000원 (-2%) · 약 -126원**", t)
         self.assertIn("잔액 현금 4,000원", t)
 
     def test_sell_shows_profit_and_day(self):
@@ -50,6 +51,9 @@ class NotifyTest(unittest.TestCase):
         self.assertIn("숏 진입", t)
         self.assertIn("익절가 96000 USDT", t)
         self.assertIn("손절가 102000 USDT", t)
+        # 숏은 값이 내려가면 번다: +40 - 수수료 0.5 - 0.48, 오르면 -20 - 0.5 - 0.51
+        self.assertIn("약 +39.02 USDT", t)
+        self.assertIn("약 -21.01 USDT", t)
 
     def test_routes_live_and_paper_to_their_own_channels(self):
         sent = []
