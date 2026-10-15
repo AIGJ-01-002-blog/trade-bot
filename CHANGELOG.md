@@ -9,6 +9,9 @@
 
 ## [Unreleased]
 
+### 고침
+- devlog.life가 파이썬 기본 접속 이름(`Python-urllib`)을 403으로 막아 자동매매 화면 알림·매매 일지 기록이 실패하던 것: devlog MCP를 부를 때 `devlog-trade-bot/버전` 이름을 붙인다.
+
 ### 추가
 - devlog 자동매매 화면(`devlog.life/trade`, devlog spec 101) 알림: `jobs`가 한 바퀴 뒤 `report_trade_bot`으로 모의 계좌·적용 중인 규칙·새 모의 체결·AI 진입 판단(허락·막음)·지난 날 하루 요약을 보낸다. 실계좌는 빼고, 실패해도 매매와 종료 코드는 그대로이며 사건은 `trade-bot-report.json`에 두었다가 다시 보낸다. `--no-report`·`TRADE_REPORT=off`로 끈다. devlog v2.2.0(PR #297) 이후 운영 서버에서 받는다.
 - 대화 주문(MCP `trade_bot_order`)의 체결도 같은 길로 자동매매 화면에 간다.
