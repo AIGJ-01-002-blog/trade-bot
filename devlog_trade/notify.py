@@ -64,6 +64,9 @@ def expected_pnl(fill: Fill, exit_price: Decimal, short: bool = False) -> Decima
 
 
 def color(fill: Fill) -> int:
+    """진입은 방향(매수·롱 초록, 숏 빨강), 정리는 손익(이익 초록, 손실 빨강). 숏 정리는 사는 쪽이라 방향으로 칠하면 손실도 초록이 된다"""
+    if fill.realized_pnl is not None:
+        return GREEN if fill.realized_pnl >= 0 else RED
     return GREEN if fill.side == "BUY" else RED
 
 
