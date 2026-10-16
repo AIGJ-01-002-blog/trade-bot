@@ -99,6 +99,15 @@ class NotifyTest(unittest.TestCase):
         self.assertTrue(t.startswith("🛑 **손절**"))
         self.assertEqual(notify.color(f), notify.RED)
 
+    def test_exit_colour_follows_pnl_not_side(self):
+        # 숏 정리는 BUY지만 손실이면 빨강, 매도 정리라도 이익이면 초록
+        loss = Fill("x5", "DOGEUSDT", "도지코인", "BUY", Decimal(3693), Decimal("0.08138"), Decimal("0.3"), Decimal("-1.18"),
+                    "[선물 숏 정리]", "2026-10-16T12:10:00+09:00", "BINANCE", "USDT")
+        win = Fill("x6", "KRW-ETH", "이더리움", "SELL", Decimal("0.03"), Decimal(3400000), Decimal(51), Decimal(2900),
+                   "익절선 +4% 도달", "2026-10-16T13:00:00+09:00", "UPBIT", "KRW")
+        self.assertEqual(notify.color(loss), notify.RED)
+        self.assertEqual(notify.color(win), notify.GREEN)
+
 
 if __name__ == "__main__":
     unittest.main()
