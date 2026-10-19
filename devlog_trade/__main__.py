@@ -18,7 +18,7 @@ from decimal import ROUND_FLOOR, Decimal
 from pathlib import Path
 from typing import Callable
 
-from . import __version__, ai, ladder, live, notify, report, rules
+from . import __version__, ai, edge, ladder, live, notify, report, rules
 from .broker import Fill, PaperBroker, state_lock
 from .exchanges import COINS, EXCHANGES, INTERVALS, Exchange, ExchangeError
 from .futures import FuturesBroker
@@ -219,7 +219,7 @@ def coin(args: argparse.Namespace) -> int:
     ex: Exchange = adapter()
     if args.state is None:
         args.state = live.live_state_name(args.exchange, ex.market, args.interval) if args.live else \
-            f"trade-state-{'ladder-' if args.rule == 'ladder' else ''}{args.exchange}-{ex.market}-{args.interval}.json"
+            f"trade-state-{'' if args.rule == 'ma-cross' else args.rule + '-'}{args.exchange}-{ex.market}-{args.interval}.json"
     chosen = {} if args.live else _chosen_rules(args, ex)
     args.chosen_by = f"대화(AI) · {chosen.get('reason') or '이유 없음'}"[:200] if chosen else ""
     if chosen.get("paused"):
@@ -233,10 +233,11 @@ def coin(args: argparse.Namespace) -> int:
     if ex.market == "futures" and not Decimal(1) <= leverage <= MAX_LEVERAGE:
         print(f"레버리지는 1~{MAX_LEVERAGE}배로 주세요.", file=sys.stderr)
         return 2
-    if args.rule == "ladder" and (args.live or args.interval != "1h"):
-        print("세 겹 거름망 기법(--rule ladder)은 1시간봉 모의 계좌에서만 돌아요.", file=sys.stderr)
+    if args.rule != "ma-cross" and (args.live or args.interval != "1h"):
+        name = "세 겹 거름망 기법" if args.rule == "ladder" else "우위 스캔 규칙"
+        print(f"{name}(--rule {args.rule})은 1시간봉 모의 계좌에서만 돌아요.", file=sys.stderr)
         return 2
-    if args.rule == "ladder" and ai.enabled(args):
+    if args.rule != "ma-cross" and ai.enabled(args):
         print("세 겹 거름망 기법은 아직 AI 판단 없이 돌아요 (AI 판단 형식은 이슈 #16).", file=sys.stderr)
     if args.live and args.dry_run and not args.testnet:  # 테스트넷은 돈이 오가지 않아 화면에만 볼 수 있다
         print("실거래소 --live는 --dry-run과 함께 쓸 수 없어요. 실계좌 체결은 devlog에 남겨야 해요.", file=sys.stderr)
@@ -256,8 +257,8 @@ def _chosen_rules(args: argparse.Namespace, ex: Exchange) -> dict:
     if not row:
         return {}
     try:
-        rules.clean(account, {k: row.get(k) for k in rules.FIELDS if k in row}, args.rule == "ladder", ex.default_budget)
-        if args.rule != "ladder":
+        rules.clean(account, {k: row.get(k) for k in rules.FIELDS if k in row}, args.rule != "ma-cross", ex.default_budget)
+        if args.rule == "ma-cross":
             leverage = Decimal(args.leverage) if ex.market == "futures" else Decimal(1)
             rules.check_risk(Decimal(row.get("budget") or args.budget or ex.default_budget),
                              Decimal(row.get("stop_loss") or args.stop_loss), leverage, Decimal(args.cash) if args.cash else ex.default_cash)
@@ -297,6 +298,20 @@ def _coin_session(args: argparse.Namespace, ex: Exchange, symbols: list[str], fe
             **({"기준을 정한 곳": args.chosen_by} if getattr(args, "chosen_by", "") else {})})
         got, seen = ladder.run(s, ex, symbols, args.limit, int(MAX_LEVERAGE),
                                lambda k: k.close_time.astimezone(KST).isoformat(timespec="seconds"))
+        ok = s.send_all() and got and ok
+        s.save()
+        print(f"{ex.code} {ex.market} 1h봉 · {', '.join(seen) or '받은 시세 없음'} · {b.describe()}")
+        return 0 if ok else 1
+    if args.rule in edge.RULES:
+        if args.strategy == "ma-cross":
+            args.strategy = edge.VERSION[args.rule]
+        report.set_rules(s.state.parent, s.state.name, {
+            "전략": edge.VERSION[args.rule] + (" 100봉 돌파 + 일봉 추세" if args.rule == "breakout" else " 변동성 돌파 (k=0.7)"),
+            "봉": "1h", "코인": ", ".join(symbols), "코인마다": "계좌 ÷ 코인 수의 절반", "레버리지": "1배",
+            "모드": "모의(--dry-run)" if args.dry_run else "모의",
+            **({"기준을 정한 곳": args.chosen_by} if getattr(args, "chosen_by", "") else {})})
+        got, seen = edge.run(args.rule, s, ex, symbols, args.limit,
+                             lambda k: k.close_time.astimezone(KST).isoformat(timespec="seconds"))
         ok = s.send_all() and got and ok
         s.save()
         print(f"{ex.code} {ex.market} 1h봉 · {', '.join(seen) or '받은 시세 없음'} · {b.describe()}")
@@ -412,8 +427,9 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--market", choices=["spot", "futures"], default="spot", help="현물(spot) 또는 USDT-M 선물(futures, 바이낸스만)")
     c.add_argument("--coins", help=f"거래할 코인, 쉼표로 (기본 {','.join(COINS)})")
     c.add_argument("--symbol", help="마켓 코드를 직접 줄 때, 쉼표로 (예: BTCUSDT 또는 KRW-BTC). 주면 --coins는 무시해요")
-    c.add_argument("--rule", choices=["ma-cross", "ladder"], default="ma-cross",
-                   help="매매 규칙. ma-cross: 이동평균선 교차(예제), ladder: 세 겹 거름망 복리법(1시간봉 모의 전용)")
+    c.add_argument("--rule", choices=["ma-cross", "ladder", *edge.RULES], default="ma-cross",
+                   help="매매 규칙. ma-cross: 이동평균선 교차(예제), ladder: 세 겹 거름망 복리법, breakout: 100봉 돌파 + 일봉 추세, "
+                        "volbreak: 변동성 돌파 (ladder·breakout·volbreak는 1시간봉 모의 전용)")
     c.add_argument("--interval", choices=list(INTERVALS), default="1h", help="봉 간격")
     c.add_argument("--limit", type=int, default=200, help="종목마다 한 번에 받을 봉 수 (전략을 데우는 데 씀, 업비트는 200까지)")
     c.add_argument("--state", help="모의 계좌 상태 파일. 기본 trade-state-<거래소>-<시장>-<봉>.json")

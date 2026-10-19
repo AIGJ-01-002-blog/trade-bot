@@ -127,7 +127,7 @@ def apply(args, account: str) -> dict:
     row = for_account(account)
     if row.get("coins"):
         args.coins, args.symbol = row["coins"], None
-    if args.rule != "ladder":
+    if args.rule == "ma-cross":
         if row.get("window"):
             args.window = int(row["window"])
         if row.get("stop_loss"):
