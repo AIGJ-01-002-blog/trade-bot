@@ -34,21 +34,27 @@ class EdgeScanTest(unittest.TestCase):
     def test_cost_once_per_side(self):
         h1 = walk(10, 1)
         pos = np.array([0, 1, 1, 1, 0, 0, 0, 0, 0, 0], dtype=float)
-        b = E.bars(h1, pos, 0.001, None)
-        t = E.trades(b, 0.001)
+        b = E.bars(h1, pos, (0.001, 0.0002), None)
+        t = E.trades(b, (0.001, 0.0002))
         self.assertEqual(len(t), 1)
         o = h1["open"].to_numpy()
         gross = o[5] / o[2] - 1  # 봉 1에서 정하고 봉 2 시가에 사서, 봉 4에서 정하고 봉 5 시가에 판다
         self.assertAlmostEqual(t["gross"].iloc[0], gross, places=12)
-        self.assertAlmostEqual(t["net"].iloc[0], (1 + gross) * 0.999 ** 2 - 1, places=12)
-        self.assertAlmostEqual(b["gross"].sum() - b["net"].sum(), 0.002, places=12)
+        self.assertAlmostEqual(t["net"].iloc[0], (1 + gross) * 0.999 * 0.9998 - 1, places=12)
+        self.assertAlmostEqual(b["gross"].sum() - b["net"].sum(), 0.0012, places=12)
+
+    def test_flip_pays_exit_and_entry(self):
+        h1 = walk(6, 4)
+        pos = np.array([1, -1, 0, 0, 0, 0], dtype=float)  # 롱 → 숏 → 정리
+        b = E.bars(h1, pos, (0.001, 0.0002), None)
+        self.assertAlmostEqual(b["gross"].sum() - b["net"].sum(), 0.001 + (0.0002 + 0.001) + 0.0002, places=12)
 
     def test_short_pays_negative_funding(self):
         h1 = walk(6, 2)
         h1["open"] = 100.0
         pos = np.array([-1, -1, 0, 0, 0, 0], dtype=float)
         fund = pd.Series([0.0, 0.001, 0.0, 0, 0, 0], index=h1.index)
-        b = E.bars(h1, pos, 0.0, fund)
+        b = E.bars(h1, pos, (0.0, 0.0), fund)
         self.assertAlmostEqual(b["gross"].sum(), 0.001)  # 펀딩비가 플러스면 숏이 받는다
 
 

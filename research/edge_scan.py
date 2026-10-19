@@ -25,12 +25,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ladder as L  # noqa: E402
 from run_backtest import COINS, IS, OOS, load  # noqa: E402
 
-# 계좌: (자료 폴더, 선물 여부, {시나리오: 한쪽 비용})
+# 계좌: (자료 폴더, 선물 여부, {시나리오: (들어갈 때 비용, 나올 때 비용)})
+# mixed: 돌파 진입은 시장가(테이커+미끄러짐), 정리는 지정가(메이커)가 체결된다고 본다
 ACCOUNTS = {
-    "binance-spot": ("binance-spot", False, {"taker": 0.001 + 0.0005}),
-    "upbit-spot": ("upbit-spot", False, {"taker": 0.0005 + 0.0005}),
-    "binance-futures": ("binance-futures", True, {"taker": 0.0005 + 0.0005, "maker": 0.0002}),
+    "binance-spot": ("binance-spot", False, {"taker": (0.0015, 0.0015)}),
+    "upbit-spot": ("upbit-spot", False, {"taker": (0.001, 0.001)}),
+    "binance-futures": ("binance-futures", True, {"taker": (0.001, 0.001), "mixed": (0.001, 0.0002),
+                                                  "maker": (0.0002, 0.0002)}),
 }
+HALF = 0.5  # 코인마다 돈의 절반만 쓸 때(나머지는 현금) 낙폭을 함께 본다
 STRESS = 1.5  # 비용을 이만큼 올려도 플러스여야 통과
 MIN_TRADES = 100
 
@@ -157,21 +160,27 @@ CANDS = [
 ]
 
 
-def bars(h1: pd.DataFrame, pos: np.ndarray, cost: float, funding: pd.Series | None) -> pd.DataFrame:
+Cost = tuple[float, float]  # (들어갈 때, 나올 때) 한쪽 비용
+
+
+def bars(h1: pd.DataFrame, pos: np.ndarray, cost: Cost, funding: pd.Series | None) -> pd.DataFrame:
     """봉 t에서 정한 포지션은 t+1 시가부터 t+2 시가까지 들고 있다. 봉마다 비용 뺀 수익과 들고 있던 포지션을 낸다"""
     o = h1["open"].to_numpy()
     r = np.append(o[1:] / o[:-1] - 1, 0.0)
     held = np.append(0.0, pos[:-1])
     held = np.nan_to_num(held)
-    turn = np.abs(np.diff(np.append(0.0, held)))
+    prev = np.append(0.0, held[:-1])
+    flip = held * prev < 0  # 롱→숏(또는 반대)은 다 정리하고 새로 들어간다
+    out = np.where(flip, np.abs(prev), np.maximum(0, np.abs(prev) - np.abs(held)))
+    inn = np.where(flip, np.abs(held), np.maximum(0, np.abs(held) - np.abs(prev)))
     fund = np.zeros(len(h1))
     if funding is not None and len(funding):
         fund = funding.reindex(h1.index).fillna(0).to_numpy()
     gross = held * r - held * fund
-    return pd.DataFrame({"held": held, "gross": gross, "net": gross - turn * cost}, index=h1.index)
+    return pd.DataFrame({"held": held, "gross": gross, "net": gross - inn * cost[0] - out * cost[1]}, index=h1.index)
 
 
-def trades(b: pd.DataFrame, cost: float) -> pd.DataFrame:
+def trades(b: pd.DataFrame, cost: Cost) -> pd.DataFrame:
     """같은 방향으로 이어 든 구간 하나가 거래 하나. 들어갈 때·나올 때 비용을 한 번씩 뺀다"""
     h = b["held"].to_numpy()
     if not len(h):
@@ -184,11 +193,17 @@ def trades(b: pd.DataFrame, cost: float) -> pd.DataFrame:
     g = df.groupby("run")
     gross = np.expm1(g["lg"].sum().to_numpy())
     return pd.DataFrame({"entry": g.apply(lambda x: x.index[0]).to_numpy(), "side": g["h"].first().to_numpy(),
-                         "gross": gross, "net": (1 + gross) * (1 - cost) ** 2 - 1})
+                         "gross": gross, "net": (1 + gross) * (1 - cost[0]) * (1 - cost[1]) - 1})
 
 
-def stats(port: pd.Series, tr: pd.DataFrame) -> dict:
+def curve(port: pd.Series) -> tuple[float, float]:
     eq = (1 + port).cumprod()
+    return (float((eq.iloc[-1] - 1) * 100), float((eq / eq.cummax() - 1).min() * 100)) if len(eq) else (0.0, 0.0)
+
+
+def stats(port: pd.Series, tr: pd.DataFrame, exposure: float = np.nan) -> dict:
+    eq = (1 + port).cumprod()
+    half_ret, half_dd = curve(port * HALF)
     n = len(tr)
     net = tr["net"].to_numpy(dtype=float) if n else np.array([])
     gross = tr["gross"].to_numpy(dtype=float) if n else np.array([])
@@ -202,26 +217,39 @@ def stats(port: pd.Series, tr: pd.DataFrame) -> dict:
             "t": float(net.mean() / sd * np.sqrt(n)) if n > 1 and sd > 0 else np.nan,
             "return_pct": float((eq.iloc[-1] - 1) * 100) if len(eq) else 0.0,
             "max_dd_pct": float((eq / eq.cummax() - 1).min() * 100) if len(eq) else 0.0,
-            "per_year": float(n / max(1e-9, (port.index[-1] - port.index[0]).days / 365.25)) if len(port) else 0.0}
+            "per_year": float(n / max(1e-9, (port.index[-1] - port.index[0]).days / 365.25)) if len(port) else 0.0,
+            "exposure_pct": exposure * 100, "half_return_pct": half_ret, "half_max_dd_pct": half_dd}
 
 
-def evaluate(h1s: dict, funding: dict, fut: bool, rule: Rule, cost: float, span) -> dict:
-    sleeves, trs = [], []
+def evaluate(h1s: dict, funding: dict, fut: bool, rule: Rule, cost: Cost, span) -> dict:
+    sleeves, trs, held = [], [], []
     for c, h1 in h1s.items():
         b = bars(h1, rule(h1, fut), cost, funding.get(c))
         b = b[(b.index >= span[0]) & (b.index < span[1])]
         sleeves.append(b["net"].rename(c))
+        held.append(b["held"].abs().mean())
         t = trades(b, cost)
         t["coin"] = c
         trs.append(t)
     port = pd.concat(sleeves, axis=1).fillna(0).mean(axis=1)
     tr = pd.concat(trs, ignore_index=True)
-    return stats(port, tr)
+    return stats(port, tr, float(np.mean(held)) if held else np.nan)
 
 
-def passes(m: dict, stress: dict) -> bool:
+def buy_hold(h1s: dict, span) -> tuple[float, float]:
+    """코인 5종을 같은 돈으로 사서 들고만 있을 때(매 봉 같은 비중으로 맞춘다고 본다, 비용 없음)"""
+    rs = []
+    for c, h1 in h1s.items():
+        o = h1["open"]
+        r = (o.shift(-1) / o - 1).fillna(0)
+        rs.append(r[(r.index >= span[0]) & (r.index < span[1])].rename(c))
+    return curve(pd.concat(rs, axis=1).fillna(0).mean(axis=1))
+
+
+def passes(m: dict, stress: dict, dd_key: str = "max_dd_pct") -> bool:
+    """dd_key="half_max_dd_pct"면 코인마다 돈의 절반만 쓸 때의 낙폭으로 본다(비중은 고를 수 있으니)"""
     return (m["trades"] >= MIN_TRADES and m["net_bp"] > 0 and m["t"] >= 2 and m["pf"] >= 1.2
-            and m["max_dd_pct"] >= -15 and stress["return_pct"] > 0)
+            and m[dd_key] >= -15 and stress["return_pct"] > 0)
 
 
 def run_account(name: str, data: Path, log) -> dict:
@@ -251,12 +279,13 @@ def run_account(name: str, data: Path, log) -> dict:
                 if best is None or score > best_ret:
                     best, best_ret = (kw, rule, m_is, m_oos), score
             kw, rule, m_is, m_oos = best
-            stress = evaluate(h1s, funding, fut, rule, cost * STRESS, OOS)
-            out.append({"scenario": sc, "cost_side_pct": cost * 100, "cand": cand.name, "chosen": kw,
-                        "is": m_is, "oos": m_oos, "stress_oos": stress, "pass": passes(m_oos, stress)})
+            stress = evaluate(h1s, funding, fut, rule, (cost[0] * STRESS, cost[1] * STRESS), OOS)
+            out.append({"scenario": sc, "cost_pct": f"{cost[0] * 100:.2f}/{cost[1] * 100:.2f}", "cand": cand.name, "chosen": kw,
+                        "is": m_is, "oos": m_oos, "stress_oos": stress, "pass": passes(m_oos, stress),
+                        "pass_half": passes(m_oos, stress, "half_max_dd_pct")})
             log(f"{name} {sc} {cand.name} {kw}: 뒤 구간 {m_oos['return_pct']:.1f}% 거래 {m_oos['trades']} "
                 f"건당 {m_oos['net_bp']:.1f}bp (비용 전 {m_oos['gross_bp']:.1f}bp)")
-    return {"account": name, "coins": list(h1s), "results": out, "grid": rows}
+    return {"account": name, "coins": list(h1s), "results": out, "grid": rows, "buy_hold_oos": buy_hold(h1s, OOS)}
 
 
 def f(v, d=1):
@@ -270,20 +299,25 @@ def report(results: list[dict]) -> str:
              f"앞 구간 {IS[0]:%Y-%m} ~ 2023-12에서 조합을 고르고 뒤 구간 {OOS[0]:%Y-%m} ~ 2026-09에서 확인했어요. "
              "코인 5종을 같은 돈으로 나눠 담고 레버리지는 1배예요. 비용은 한쪽마다 수수료 + 미끄러짐이고 선물은 펀딩비도 뺐어요.", "",
              f"통과 기준(#35): 거래 {MIN_TRADES}건 이상, 건당 순수익 > 0, t ≥ 2, PF ≥ 1.2, 최대 낙폭 ≥ -15%, 비용 {STRESS}배에서도 수익 플러스.",
-             "'비용 전'은 같은 거래를 비용 없이 쳤을 때 건당 수익이에요. 이게 비용(왕복)보다 작으면 우위가 비용에 먹혀요.", ""]
+             "'비용 전'은 같은 거래를 비용 없이 쳤을 때 건당 수익이에요. 이게 비용(왕복)보다 작으면 우위가 비용에 먹혀요.",
+             f"'노출'은 돈이 코인에 들어가 있던 시간 비율이고, '절반'은 코인마다 돈의 {HALF:.0%}만 쓸 때 수익·낙폭이에요. "
+             "보유(그냥 사서 들고 있기)와 견줘, 수익이 노출만큼의 보유 수익보다 큰지 보세요.", ""]
     for r in results:
         if "skipped" in r:
             lines += [f"## {r['account']}: {r['skipped']}", ""]
             continue
-        lines += [f"## {r['account']}", "",
-                  "| 시나리오(한쪽 비용) | 후보 | 고른 값 | 거래 | 연간 | 비용 전 bp | 비용 후 bp | 승률 | PF | t | 수익 | 낙폭 | 비용×1.5 수익 | 통과 |",
-                  "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+        bh_ret, bh_dd = r["buy_hold_oos"]
+        lines += [f"## {r['account']}", "", f"보유(비용 없음): 수익 {f(bh_ret)}%, 낙폭 {f(bh_dd)}%", "",
+                  "| 시나리오(진입/정리 비용) | 후보 | 고른 값 | 거래 | 연간 | 노출 | 비용 전 bp | 비용 후 bp | 승률 | PF | t | 수익 | 낙폭 "
+                  "| 절반 수익 | 절반 낙폭 | 비용×1.5 수익 | 통과 | 절반 통과 |",
+                  "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
         for x in r["results"]:
             o, s = x["oos"], x["stress_oos"]
-            lines.append(f"| {x['scenario']} ({x['cost_side_pct']:.2f}%) | {x['cand']} | {x['chosen']} | {o['trades']} | "
-                         f"{f(o['per_year'], 0)} | {f(o['gross_bp'])} | {f(o['net_bp'])} | {f(o['win_pct'])}% | {f(o['pf'], 2)} | "
-                         f"{f(o['t'], 2)} | {f(o['return_pct'])}% | {f(o['max_dd_pct'])}% | {f(s['return_pct'])}% | "
-                         f"{'✅' if x['pass'] else '❌'} |")
+            lines.append(f"| {x['scenario']} ({x['cost_pct']}%) | {x['cand']} | {x['chosen']} | {o['trades']} | "
+                         f"{f(o['per_year'], 0)} | {f(o['exposure_pct'], 0)}% | {f(o['gross_bp'])} | {f(o['net_bp'])} | {f(o['win_pct'])}% | {f(o['pf'], 2)} | "
+                         f"{f(o['t'], 2)} | {f(o['return_pct'])}% | {f(o['max_dd_pct'])}% | {f(o['half_return_pct'])}% | "
+                         f"{f(o['half_max_dd_pct'])}% | {f(s['return_pct'])}% | "
+                         f"{'✅' if x['pass'] else '❌'} | {'✅' if x['pass_half'] else '❌'} |")
         g = pd.DataFrame(r["grid"])
         top = g.sort_values("oos_return_pct", ascending=False).head(3)
         lines += ["", "뒤 구간을 미리 보고 골랐을 때(과적합, 참고만) 가장 좋았던 조합 셋:", ""]
@@ -293,8 +327,9 @@ def report(results: list[dict]) -> str:
             lines.append(f"- {t['scenario']} {t['cand']} {params}: {f(t['oos_return_pct'])}%, 낙폭 {f(t['oos_max_dd_pct'])}%, "
                          f"거래 {t['oos_trades']}, 건당 {f(t['oos_net_bp'])}bp")
         lines.append("")
-    ok = [(r["account"], x["scenario"], x["cand"]) for r in results if "results" in r for x in r["results"] if x["pass"]]
-    lines += ["## 결론", "", ("통과: " + ", ".join(f"{a} {s} {c}" for a, s, c in ok)) if ok else
+    ok = [(r["account"], x["scenario"], x["cand"], "" if x["pass"] else " (절반 비중)")
+          for r in results if "results" in r for x in r["results"] if x["pass"] or x["pass_half"]]
+    lines += ["## 결론", "", ("통과: " + ", ".join(f"{a} {s} {c}{h}" for a, s, c, h in ok)) if ok else
               "통과한 후보가 없어요. 비용을 뺀 뒤 남는 우위는 확인되지 않았어요. 실계좌는 그대로 막아 둬요(#37).", ""]
     return "\n".join(lines)
 
