@@ -85,3 +85,29 @@ jobs:
         with:
           name: backtest-freqtrade
           path: research/results/freqtrade
+
+  edge-scan:
+    needs: data
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false  # pip 설치 코드가 GitHub 토큰을 읽지 못하게
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: backtest-data
+          path: research/data
+      - run: pip install -r research/requirements.txt
+      - name: 우위 스캔 자체 확인 (앞을 보지 않는지, 비용 계산)
+        run: python -m unittest research/test_edge_scan.py -v
+      - name: 단타 후보 우위 스캔 (수수료·미끄러짐·펀딩비 뺀 뒤)
+        run: python research/edge_scan.py --data research/data --out research/results/edge
+      - run: cat research/results/edge/report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backtest-edge
+          path: research/results/edge
