@@ -8,6 +8,7 @@
 | `fetch_data.py` | 2021-01 ~ 2026-09 1시간봉과 선물 펀딩비, 공포·탐욕 지수 받기 (바이낸스는 data.binance.vision, 업비트는 공개 API) | 봇과 같음 |
 | `ladder.py` | 기법 규칙과 계좌 장부(엔진). 지금 봇 규칙(비교 기준)도 같은 장부로 | 봇과 같음 |
 | `run_backtest.py` | 앞 구간에서 조합 고르기 → 뒤 구간 확인 → 이웃 조합·몬테카를로 → 보고서. 현물은 vectorbt로 장부 대조 | 봇과 같음 |
+| `edge_scan.py` | 단타 후보(지금 규칙, 돌파, RSI(2), 4시간 모멘텀, 변동성 돌파)가 수수료·미끄러짐·펀딩비를 빼고도 남는지 훑기 (#36, 기준 #35) | 봇과 같음 |
 | `freqtrade/` | 같은 기법을 Freqtrade 전략으로 옮긴 것(바이낸스 현물·선물) | **GPL-3.0** (`freqtrade/LICENSE`) |
 
 ## GPL을 봇에서 떼어 놓는 방법
@@ -24,6 +25,7 @@ python -m venv .venv && . .venv/bin/activate
 pip install -r research/requirements.txt
 python research/fetch_data.py --out research/data --start 2020-08 --end 2026-09   # 처음 한 번, 몇 분
 python research/run_backtest.py --data research/data --out research/results/engine
+python research/edge_scan.py --data research/data --out research/results/edge          # 단타 후보 우위 스캔
 
 pip install -r research/freqtrade/requirements.txt   # Freqtrade 대조(선택)
 python research/freqtrade/run_offline.py --data research/data --out research/results/freqtrade
