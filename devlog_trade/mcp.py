@@ -115,7 +115,7 @@ class TradeBotTools:
              "description": "모의 계좌마다 봇이 따를 기준(코인·이동평균 봉 수·손절·익절·하루 수익 멈춤·한 번 금액·멈춤)을 봅니다(get), 바꿉니다(set), "
                             "jobs.conf대로 되돌립니다(clear). 판단은 이 대화의 AI가 하고, 주문은 봇이 5분마다 이 기준과 상한 안에서 냅니다. "
                             "다음 바퀴부터 적용되고 devlog 자동매매 화면에 '기준을 정한 곳'으로 보입니다. 실계좌(trade-live-…)는 바꾸지 않습니다. "
-                            "세 겹 거름망 계좌(trade-state-ladder-…)는 코인과 멈춤만 됩니다. 손절에 걸렸을 때 잃는 돈(금액 × 레버리지 × 손절)이 "
+                            "규칙 계좌(trade-state-ladder-…·breakout-…·volbreak-…)는 코인과 멈춤만 됩니다. 손절에 걸렸을 때 잃는 돈(금액 × 레버리지 × 손절)이 "
                             "처음 현금의 1%를 넘는 값은 거절합니다.",
              "inputSchema": {"type": "object", "properties": {
                  "action": {"type": "string", "enum": ["get", "set", "clear"], "default": "get"},
@@ -202,7 +202,7 @@ class TradeBotTools:
         """mode: PAPER(모의), TESTNET(거래소 테스트넷, 가짜 돈), LIVE(실거래소)"""
         out, prices = [], {}
         for path in sorted(self.root.glob("trade-*-*.json")):
-            if not ACCOUNT_FILE.match(path.name) or path.name.endswith((".pending.json", ".ladder.json")):
+            if not ACCOUNT_FILE.match(path.name) or path.name.endswith((".pending.json", ".ladder.json", ".edge.json")):
                 continue
             try:
                 b = self._load(path)
@@ -368,7 +368,7 @@ class TradeBotTools:
             raise ToolError("reason에 왜 이렇게 정했는지 한 줄을 넣어 주세요. 자동매매 화면에 남아요.")
         data = json.loads(path.read_text(encoding="utf-8"))
         ex = self._exchange(str(data.get("exchange", "")).lower(), data.get("market", "spot"))
-        ladder = account.startswith("trade-state-ladder-")
+        ladder = account.startswith(("trade-state-ladder-", "trade-state-breakout-", "trade-state-volbreak-"))  # 규칙 계좌: 코인·멈춤만
         try:
             cleaned = rules.clean(account, values, ladder, ex.default_budget)
             if not ladder:  # 이미 정한 값과 합쳐 한 번 손실 1% 상한을 본다
